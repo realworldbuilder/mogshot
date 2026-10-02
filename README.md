@@ -10,10 +10,12 @@ Not usable for making images yet. This section is updated as things actually wor
 
 What works today, in Chrome on a Mac, against WoW build 1.60.1.70170 (`wow_classic_beta`):
 
-- Pick your World of Warcraft folder. The page names the product and build, counts how many of the build's files are on disk, says whether high-res textures are installed, and reads a database table, a model and a texture from the local archives.
-- Nothing is fetched from the network after the folder is picked.
+- Drag your World of Warcraft folder onto the page, or choose it with the button. The page names the product and build, counts how many of the build's files are on disk, says whether high-res textures are installed, and reads a database table, a model and a texture from the local archives.
+- Nothing is fetched from the network after the folder is given.
 
-Not yet tested: Edge, Windows, and any other WoW product. On Windows, Chrome's folder picker refuses folders inside `Program Files`; the page has a second picker for that case.
+Not yet tested: Edge, Windows, other browsers, and any other WoW product.
+
+Chrome's newer folder picker (`showDirectoryPicker`) is not used: it refuses anything inside `/Applications` or `Program Files`, which is where the game installs. The cost is that the page cannot remember the folder between visits.
 
 ## Development
 
