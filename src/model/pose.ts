@@ -122,7 +122,14 @@ function sampleQuat(keys: Keys | undefined): Quat {
  * Bone matrices (16 floats each, model space) for a sequence at a time in milliseconds.
  * A vertex is posed by blending the matrices of its bones.
  */
-export function poseBones(rig: Rig, sequenceIndex: number, timeMs: number, anims?: AnimBuffers): Float32Array {
+export function poseBones(
+  rig: Rig,
+  sequenceIndex: number,
+  timeMs: number,
+  anims?: AnimBuffers,
+  /** Per-bone adjustments from appearance choices (see formats/bone.ts), applied about the bone's pivot. */
+  offsets?: ReadonlyMap<number, Float32Array>,
+): Float32Array {
   const sequence = resolveAlias(rig.sequences, sequenceIndex);
   const duration = rig.sequences[sequence]?.duration ?? 0;
   const time = duration > 0 ? Math.min(Math.max(timeMs, 0), duration) : 0;
@@ -131,6 +138,7 @@ export function poseBones(rig: Rig, sequenceIndex: number, timeMs: number, anims
   const matrices = new Float32Array(count * 16);
   const done = new Uint8Array(count);
   const local = new Float32Array(16);
+  const adjust = new Float32Array(16);
 
   const solve = (i: number): Mat4 => {
     const out = matrices.subarray(i * 16, i * 16 + 16);
@@ -142,6 +150,16 @@ export function poseBones(rig: Rig, sequenceIndex: number, timeMs: number, anims
     const q = sampleQuat(hasSequence ? keysOf(rig, bone.rotation, sequence, time, anims) : undefined);
     const s = sampleVec3(hasSequence ? keysOf(rig, bone.scale, sequence, time, anims) : undefined, [1, 1, 1]);
     pivotTransform(local, bone.pivot, t, q, s);
+    const offset = offsets?.get(i);
+    if (offset) {
+      // The adjustment acts in the bone's own space: move the pivot to the origin, adjust, move back.
+      const [px, py, pz] = bone.pivot;
+      adjust.set(offset);
+      adjust[12] = offset[12]! + px - (offset[0]! * px + offset[4]! * py + offset[8]! * pz);
+      adjust[13] = offset[13]! + py - (offset[1]! * px + offset[5]! * py + offset[9]! * pz);
+      adjust[14] = offset[14]! + pz - (offset[2]! * px + offset[6]! * py + offset[10]! * pz);
+      multiply(local, local, adjust);
+    }
     if (bone.parent >= 0) multiply(out, solve(bone.parent), local);
     else out.set(local);
     return out;
