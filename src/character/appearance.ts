@@ -17,6 +17,13 @@ export interface CharacterModel {
   layoutId: number;
 }
 
+export interface Race {
+  id: number;
+  name: string;
+  /** Sexes the race has a model for: 0 = male, 1 = female. */
+  sexes: number[];
+}
+
 export interface Choice {
   id: number;
   name: string;
@@ -27,6 +34,11 @@ export interface Choice {
 export interface Option {
   id: number;
   name: string;
+  /**
+   * Not offered on the character creation screen of this product. Its first choice still
+   * applies: the undead jaw, for one, comes from such an option.
+   */
+  hidden: boolean;
   choices: Choice[];
 }
 
@@ -48,14 +60,18 @@ export interface TextureLayer {
 }
 
 export interface Resolved {
-  /** Geoset requests in option order: show `variant` of `group` (0 = none of that group). */
-  geosets: { group: number; variant: number }[];
+  /**
+   * Geosets to switch on or off, in order. An option switches off every geoset its choices
+   * name and switches on those of the chosen one; geosets no option names keep their default.
+   * `id` is group * 100 + variant.
+   */
+  geosets: { id: number; visible: boolean }[];
   /** Texture layers, sorted in drawing order within each slot. */
   layers: TextureLayer[];
-  /** Bone sets the choices ask for. Not applied yet. */
-  boneSets: number[];
-  /** Extra models the choices attach. Not applied yet. */
-  skinnedModels: number[];
+  /** Files of bone adjustments (face shapes) the choices ask for. */
+  boneFiles: number[];
+  /** Geosets of other models that the choices add to the character, skinned to its bones. */
+  skinnedModels: { fileId: number; group: number; variant: number }[];
   /** Things the data asked for that could not be resolved. */
   problems: string[];
 }
@@ -96,12 +112,16 @@ export class Appearance {
     private readonly layersByLayout: Map<number, Row[]>,
     private readonly slotSizes: Map<string, { width: number; height: number }>,
     private readonly sectionsByLayout: Map<number, Row[]>,
+    private readonly boneSets: Map<number, { boneFileId: number; modelFileId: number }>,
+    private readonly skinnedModels: Map<number, { fileId: number; group: number; variant: number }>,
+    /** Races a player can create in this product, in name order. */
+    readonly races: Race[],
   ) {}
 
   static async load(database: Database): Promise<Appearance> {
     const [
       raceModels, chrModels, displays, modelData, options, choices, reqs, elements,
-      geosets, materials, textureFiles, layers, slotMaterials, sections,
+      geosets, materials, textureFiles, layers, slotMaterials, sections, boneSets, skinnedModels, chrRaces, creatable,
     ] = await Promise.all([
       database.table('ChrRaceXChrModel', ['ChrRacesID', 'ChrModelID', 'Sex']),
       database.table('ChrModel', ['DisplayID', 'CharComponentTextureLayoutID']),
@@ -122,6 +142,11 @@ export class Appearance {
       ]),
       database.table('ChrModelMaterial', ['CharComponentTextureLayoutsID', 'TextureType', 'Width', 'Height']),
       database.table('CharComponentTextureSections', ['CharComponentTextureLayoutID', 'SectionType', 'X', 'Y', 'Width', 'Height']),
+      database.table('ChrCustomizationBoneSet', ['BoneFileDataID', 'ModelFileDataID']),
+      database.table('ChrCustomizationSkinnedModel', ['CollectionsFileDataID', 'GeosetType', 'GeosetID']),
+      database.table('ChrRaces', ['Name_lang']),
+      // The race and class combinations the character creation screen offers.
+      database.table('CharBaseInfo', ['RaceID']),
     ]);
 
     const byId = (rows: Row[]) => new Map(rows.map((row) => [n(row.ID), row]));
@@ -150,11 +175,11 @@ export class Appearance {
       optionsByModel.set(
         modelId,
         rows
-          .filter((row) => (n(row.Flags) & OPTION_HIDDEN) === 0)
           .sort(byOrder)
           .map((row) => ({
             id: n(row.ID),
             name: String(row.Name_lang),
+            hidden: (n(row.Flags) & OPTION_HIDDEN) !== 0,
             choices: (choicesByOption.get(n(row.ID)) ?? []).sort(byOrder).map((choice) => {
               const req = reqById.get(n(choice.ChrCustomizationReqID));
               const classMask = n(req?.ClassMask);
@@ -185,6 +210,17 @@ export class Appearance {
       if (n(row.UsageType) === 0) fileByMaterialResource.set(n(row.MaterialResourcesID), n(row.FileDataID));
     }
 
+    const creatableRaces = new Set(creatable.rows.map((row) => n(row.RaceID)));
+    const races: Race[] = chrRaces.rows
+      .filter((row) => creatableRaces.has(n(row.ID)))
+      .map((row) => ({
+        id: n(row.ID),
+        name: String(row.Name_lang),
+        sexes: [0, 1].filter((sex) => models.has(`${n(row.ID)}:${sex}`)),
+      }))
+      .filter((race) => race.sexes.length > 0)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
     return new Appearance(
       models,
       optionsByModel,
@@ -204,6 +240,14 @@ export class Appearance {
         ]),
       ),
       groupBy(sections.rows, 'CharComponentTextureLayoutID'),
+      new Map(boneSets.rows.map((row) => [n(row.ID), { boneFileId: n(row.BoneFileDataID), modelFileId: n(row.ModelFileDataID) }])),
+      new Map(
+        skinnedModels.rows.map((row) => [
+          n(row.ID),
+          { fileId: n(row.CollectionsFileDataID), group: n(row.GeosetType), variant: n(row.GeosetID) },
+        ]),
+      ),
+      races,
     );
   }
 
@@ -212,7 +256,7 @@ export class Appearance {
     return this.models.get(`${raceId}:${sex}`);
   }
 
-  /** The model's appearance options in the game's order, each with its choices. */
+  /** The model's appearance options in the game's order, each with its choices. Includes hidden ones. */
   options(chrModelId: number): Option[] {
     return this.optionsByModel.get(chrModelId) ?? [];
   }
@@ -230,7 +274,7 @@ export class Appearance {
   /** What a set of choices (option ID -> choice ID) does to the model. */
   resolve(model: CharacterModel, choices: ReadonlyMap<number, number>): Resolved {
     const active = new Set(choices.values());
-    const resolved: Resolved = { geosets: [], layers: [], boneSets: [], skinnedModels: [], problems: [] };
+    const resolved: Resolved = { geosets: [], layers: [], boneFiles: [], skinnedModels: [], problems: [] };
     const layerRows = this.layersByLayout.get(model.layoutId) ?? [];
     const sections = this.sectionsByLayout.get(model.layoutId) ?? [];
     const order = new Map<TextureLayer, number>();
@@ -238,16 +282,32 @@ export class Appearance {
     for (const option of this.options(model.chrModelId)) {
       const choiceId = choices.get(option.id);
       if (choiceId === undefined) continue;
+      for (const choice of option.choices) {
+        if (choice.id === choiceId) continue;
+        for (const element of this.elementsByChoice.get(choice.id) ?? []) {
+          const geoset = this.geosets.get(element.geosetId);
+          if (geoset) resolved.geosets.push({ id: geoset.group * 100 + geoset.variant, visible: false });
+        }
+      }
       for (const element of this.elementsByChoice.get(choiceId) ?? []) {
         // Some elements only apply together with another choice (a face texture per skin colour).
         if (element.relatedChoiceId !== 0 && !active.has(element.relatedChoiceId)) continue;
 
         if (element.geosetId !== 0) {
           const geoset = this.geosets.get(element.geosetId);
-          if (geoset) resolved.geosets.push(geoset);
+          if (geoset) resolved.geosets.push({ id: geoset.group * 100 + geoset.variant, visible: true });
         }
-        if (element.boneSetId !== 0) resolved.boneSets.push(element.boneSetId);
-        if (element.skinnedModelId !== 0) resolved.skinnedModels.push(element.skinnedModelId);
+        if (element.boneSetId !== 0) {
+          const boneSet = this.boneSets.get(element.boneSetId);
+          // A bone set is made for one model file; races that share options can list another's.
+          if (boneSet && (boneSet.modelFileId === 0 || boneSet.modelFileId === model.fileId)) {
+            resolved.boneFiles.push(boneSet.boneFileId);
+          }
+        }
+        if (element.skinnedModelId !== 0) {
+          const skinned = this.skinnedModels.get(element.skinnedModelId);
+          if (skinned) resolved.skinnedModels.push(skinned);
+        }
         if (element.materialId === 0) continue;
 
         const material = this.materials.get(element.materialId);

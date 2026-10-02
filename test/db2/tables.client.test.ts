@@ -29,6 +29,7 @@ const TABLES = [
   'ChrCustomizationDisplayInfo',
   'ChrModelTextureLayer',
   'ChrModelMaterial',
+  'CharBaseInfo',
   'TextureFileData',
   'CharComponentTextureLayouts',
   'CharComponentTextureSections',
