@@ -58,7 +58,21 @@ a {
   border-radius: 10px;
 }
 
-button.primary {
+#drop {
+  margin: 16px 0;
+  padding: 28px 20px;
+  text-align: center;
+  border: 2px dashed var(--line);
+  border-radius: 10px;
+}
+
+#drop.over {
+  border-color: var(--accent);
+  background: #f0b23214;
+}
+
+.primary {
+  display: inline-block;
   padding: 12px 20px;
   font: inherit;
   font-weight: 600;
@@ -69,26 +83,7 @@ button.primary {
   cursor: pointer;
 }
 
-button.primary:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-details {
-  margin-top: 16px;
-}
-
-summary {
-  cursor: pointer;
-  color: var(--dim);
-}
-
-details > div {
-  margin-top: 10px;
-}
-
-select,
-input[type='file'] {
+select {
   font: inherit;
   color: inherit;
 }

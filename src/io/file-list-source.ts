@@ -1,15 +1,15 @@
 import type { ByteSource } from './byte-source';
 
-/** A file from `<input type="file" webkitdirectory>` with its path inside the picked folder. */
+/** A file with its path inside the folder the user picked or dropped. */
 export interface PickedFile {
   path: string;
   file: File;
 }
 
 /**
- * Paths inside the picked folder: `webkitRelativePath` starts with the folder's own name,
- * which is dropped. Only the files Mogshot reads are kept, so a folder with tens of
- * thousands of addon files stays cheap to hand to the worker.
+ * Files from `<input type="file" webkitdirectory>`. `webkitRelativePath` starts with the
+ * folder's own name, which is dropped. Only the files Mogshot reads are kept, so a folder
+ * with tens of thousands of addon files stays cheap to hand to the worker.
  */
 export function pickedFiles(files: Iterable<File>): PickedFile[] {
   const picked: PickedFile[] = [];

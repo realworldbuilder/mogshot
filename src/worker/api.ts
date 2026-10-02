@@ -3,11 +3,6 @@ import type { FileIndexStats } from '../casc/file-index';
 import type { OpenStage, StorageInfo } from '../casc/storage';
 import type { PickedFile } from '../io/file-list-source';
 
-/** The folder the user picked, in a form that can be posted to the worker. */
-export type FolderSource =
-  | { kind: 'handle'; handle: FileSystemDirectoryHandle }
-  | { kind: 'files'; files: PickedFile[] };
-
 export interface OpenResult {
   info: StorageInfo;
   stats: FileIndexStats;
@@ -29,7 +24,7 @@ export interface ProbeResult {
 }
 
 export type Request =
-  | { id: number; method: 'open'; source: FolderSource; product?: string }
+  | { id: number; method: 'open'; files: PickedFile[]; product?: string }
   | { id: number; method: 'probe'; fileId: number };
 
 export type Response =

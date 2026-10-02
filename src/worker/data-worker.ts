@@ -1,8 +1,6 @@
 /// <reference lib="webworker" />
 import { CascStorage, InstallError, listProducts } from '../casc/storage';
-import type { ByteSource } from '../io/byte-source';
 import { FileListSource } from '../io/file-list-source';
-import { HandleSource } from '../io/handle-source';
 import type { OpenResult, ProbeResult, Request, Response } from './api';
 
 let storage: CascStorage | undefined;
@@ -13,10 +11,7 @@ const post = (message: Response, transfer: Transferable[] = []) =>
 async function handle(request: Request): Promise<{ value: unknown; transfer?: Transferable[] }> {
   switch (request.method) {
     case 'open': {
-      const source: ByteSource =
-        request.source.kind === 'handle'
-          ? new HandleSource(request.source.handle)
-          : new FileListSource(request.source.files);
+      const source = new FileListSource(request.files);
       const start = performance.now();
       const products = await listProducts(source);
       storage = await CascStorage.open(source, {

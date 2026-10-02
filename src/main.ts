@@ -1,15 +1,10 @@
 import './app/style.css';
 import { describeFile, formatBytes } from './app/describe';
-import type { OpenStage } from './casc/storage';
-import { pickedFiles } from './io/file-list-source';
-import type { FolderSource, OpenResult, ProbeResult } from './worker/api';
+import { InstallError, type OpenStage } from './casc/storage';
+import { filesFromDroppedFolder } from './io/dropped-folder';
+import { type PickedFile, pickedFiles } from './io/file-list-source';
+import type { OpenResult, ProbeResult } from './worker/api';
 import { DataClient, DataError } from './worker/client';
-
-declare global {
-  interface Window {
-    showDirectoryPicker?: (options?: { id?: string; mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>;
-  }
-}
 
 /** Files read to prove the local archives work: a database table, a model and a texture. */
 const PROBES = [
@@ -26,7 +21,8 @@ const STAGE_TEXT: Record<OpenStage, string> = {
   join: 'Matching file IDs to archives…',
 };
 
-const supported = typeof window.showDirectoryPicker === 'function';
+// Mogshot is developed and tested in Chrome. Other browsers get the page with a warning.
+const chromium = 'chrome' in window;
 
 const app = document.querySelector<HTMLElement>('#app')!;
 app.innerHTML = `
@@ -37,23 +33,15 @@ app.innerHTML = `
     <h2>Early build: folder check only</h2>
     <p>There is nothing to export yet. This page checks that Mogshot can read your game files.
     They are read on your computer and are never uploaded.</p>
-    ${
-      supported
-        ? `
-    <button class="primary" id="pick">Choose your World of Warcraft folder</button>
-    <p class="dim small" style="margin-top:12px">Usually <code>/Applications/World of Warcraft</code> on a Mac
-    or <code>C:\\Program Files (x86)\\World of Warcraft</code> on Windows.</p>
-    <details>
-      <summary>Chrome says it can't open that folder?</summary>
-      <div>
-        <p class="small">Chrome blocks its folder picker for anything inside <code>Program Files</code>.
-        Use this picker instead. Chrome will ask whether to "upload" the files; nothing is uploaded.
-        This path has not been tested on Windows yet.</p>
-        <input type="file" id="fallback" webkitdirectory />
-      </div>
-    </details>`
-        : `<p class="bad">Mogshot needs Chrome or Edge on a Mac or Windows computer. This browser can't open a folder for a web page.</p>`
-    }
+    ${chromium ? '' : '<p class="bad">Mogshot is only tested in Chrome. It may not work in this browser.</p>'}
+    <div id="drop">
+      <p><strong>Drag your World of Warcraft folder onto this page</strong></p>
+      <p class="dim small">It is in <code>Applications</code> on a Mac and usually in
+      <code>C:\\Program Files (x86)</code> on Windows.</p>
+      <label class="primary" id="choose">or choose the folder…<input type="file" id="folder" webkitdirectory hidden /></label>
+    </div>
+    <p class="dim small">If you use the button, Chrome asks whether to "upload" the files. That is Chrome's
+    wording for letting a page read a folder. Nothing leaves your computer. Not tested on Windows yet.</p>
   </section>
 
   <section class="panel" id="result" hidden></section>
@@ -66,11 +54,12 @@ app.innerHTML = `
 `;
 
 const result = document.querySelector<HTMLElement>('#result')!;
-const pick = document.querySelector<HTMLButtonElement>('#pick');
-const fallback = document.querySelector<HTMLInputElement>('#fallback');
+const drop = document.querySelector<HTMLElement>('#drop')!;
+const folder = document.querySelector<HTMLInputElement>('#folder')!;
 
-// Started on page load so the worker script is already in memory when the folder is picked.
-const data = supported ? new DataClient() : undefined;
+// Started on page load so the worker script is already in memory when the folder arrives.
+const data = new DataClient();
+let busy = false;
 
 const escapeHtml = (text: string) =>
   text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
@@ -98,7 +87,7 @@ function probeRow(label: string, fileId: number, probe: ProbeResult): string {
   return `<dt>${escapeHtml(label)} <span class="small">#${fileId}</span></dt><dd>${text}</dd>`;
 }
 
-function showResult(opened: OpenResult, probes: ProbeResult[], source: FolderSource): void {
+function showResult(opened: OpenResult, probes: ProbeResult[], files: PickedFile[]): void {
   const { info, stats, products } = opened;
   const percent = ((stats.onDisk / stats.listed) * 100).toFixed(2);
   const highRes =
@@ -130,39 +119,56 @@ function showResult(opened: OpenResult, probes: ProbeResult[], source: FolderSou
     </dl>
   `;
   result.querySelector<HTMLSelectElement>('#product')?.addEventListener('change', (event) => {
-    void openFolder(source, (event.target as HTMLSelectElement).value);
+    void openFolder(files, (event.target as HTMLSelectElement).value);
   });
 }
 
-async function openFolder(source: FolderSource, product?: string): Promise<void> {
-  if (!data) return;
-  if (pick) pick.disabled = true;
+function showError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  const install = error instanceof InstallError || (error instanceof DataError && error.install);
+  showStatus(install ? message : `Something went wrong reading the folder: ${message}`, true);
+}
+
+async function openFolder(files: PickedFile[], product?: string): Promise<void> {
+  if (busy) return;
+  busy = true;
   try {
     showStatus(STAGE_TEXT.config);
-    const opened = await data.open(source, product, (stage) => showStatus(STAGE_TEXT[stage]));
+    const opened = await data.open(files, product, (stage) => showStatus(STAGE_TEXT[stage]));
     const probes: ProbeResult[] = [];
     for (const probe of PROBES) probes.push(await data.probe(probe.fileId));
-    showResult(opened, probes, source);
+    showResult(opened, probes, files);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    showStatus(error instanceof DataError && error.install ? message : `Something went wrong reading the folder: ${message}`, true);
+    showError(error);
   } finally {
-    if (pick) pick.disabled = false;
+    busy = false;
   }
 }
 
-pick?.addEventListener('click', async () => {
-  let handle: FileSystemDirectoryHandle;
-  try {
-    handle = await window.showDirectoryPicker!({ id: 'wow', mode: 'read' });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') return; // picker cancelled
-    throw error;
-  }
-  await openFolder({ kind: 'handle', handle });
+folder.addEventListener('change', () => {
+  if (!folder.files || folder.files.length === 0) return;
+  void openFolder(pickedFiles(folder.files));
 });
 
-fallback?.addEventListener('change', async () => {
-  if (!fallback.files || fallback.files.length === 0) return;
-  await openFolder({ kind: 'files', files: pickedFiles(fallback.files) });
+// The whole page is the drop target, so a near miss does not make Chrome open the folder instead.
+window.addEventListener('dragover', (event) => {
+  event.preventDefault();
+  drop.classList.add('over');
+});
+window.addEventListener('dragleave', () => drop.classList.remove('over'));
+window.addEventListener('drop', async (event) => {
+  event.preventDefault();
+  drop.classList.remove('over');
+  // The entry must be taken during the event; it is gone afterwards.
+  const entry = event.dataTransfer?.items[0]?.webkitGetAsEntry();
+  if (!entry?.isDirectory) {
+    showStatus('Drop the World of Warcraft folder itself, not a file inside it.', true);
+    return;
+  }
+  try {
+    showStatus(STAGE_TEXT.config);
+    await openFolder(await filesFromDroppedFolder(entry as FileSystemDirectoryEntry));
+  } catch (error) {
+    showError(error);
+  }
 });
