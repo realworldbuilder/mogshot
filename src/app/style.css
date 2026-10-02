@@ -71,6 +71,19 @@ a {
   background: #f0b23214;
 }
 
+.primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  margin: 12px 0;
+}
+
 .primary {
   display: inline-block;
   padding: 12px 20px;

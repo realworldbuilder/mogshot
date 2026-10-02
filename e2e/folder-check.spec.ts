@@ -1,4 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { decodePng, over } from '../test/png-decode';
+import { writePng } from '../test/png';
 import { hasClient, WOW_DIR } from '../test/node-source';
 
 // Needs a game install. Reported as skipped, not passed, when there is none.
@@ -64,6 +67,82 @@ test('draws the human male', async ({ page }) => {
   // The only thing reported as not right is the one known gap.
   const problems = await page.locator('#character-problems li').allInnerTexts();
   expect(problems.filter((p) => !p.startsWith('Face shape: bone sets'))).toEqual([]);
+});
+
+test('exports a clean transparent PNG', async ({ page }) => {
+  await load(page, false);
+  await page.locator('#folder').setInputFiles(WOW_DIR);
+  await expect(page.locator('#character')).toBeVisible({ timeout: 60_000 });
+
+  const save = async (name: string) => {
+    const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#download').click()]);
+    const path = `test-results/${name}.png`;
+    await download.saveAs(path);
+    await expect(page.locator('#export-note')).toContainText('Saved');
+    console.log(name, await page.locator('#export-note').innerText());
+    return decodePng(readFileSync(path));
+  };
+
+  // Cropped: the longer side is 3840 and the character reaches every edge but for a sliver.
+  const cropped = await save('export-tight');
+  expect(Math.max(cropped.width, cropped.height)).toBe(3840);
+  const alphaAt = (image: typeof cropped, x: number, y: number) => image.pixels[(y * image.width + x) * 4 + 3]!;
+  for (const [x, y] of [[0, 0], [cropped.width - 1, 0], [0, cropped.height - 1], [cropped.width - 1, cropped.height - 1]]) {
+    expect(alphaAt(cropped, x!, y!)).toBe(0);
+  }
+  let top = cropped.height;
+  let bottom = 0;
+  for (let y = 0; y < cropped.height; y += 4) {
+    for (let x = 0; x < cropped.width; x += 4) {
+      if (alphaAt(cropped, x, y) === 0) continue;
+      top = Math.min(top, y);
+      bottom = Math.max(bottom, y);
+    }
+  }
+  expect(top).toBeLessThan(cropped.height * 0.02);
+  expect(bottom).toBeGreaterThan(cropped.height * 0.98);
+
+  // Straight alpha: partly transparent edge pixels keep the colour of what they belong to.
+  // With a dark fringe they would be much darker than the solid pixels beside them.
+  let edge = 0;
+  let solid = 0;
+  let pairs = 0;
+  const { width, height, pixels } = cropped;
+  for (let y = 1; y < height - 1; y += 3) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = (y * width + x) * 4;
+      const neighbour = i + 4;
+      if (pixels[i + 3]! > 40 && pixels[i + 3]! < 215 && pixels[neighbour + 3] === 255) {
+        edge += pixels[i]! + pixels[i + 1]! + pixels[i + 2]!;
+        solid += pixels[neighbour]! + pixels[neighbour + 1]! + pixels[neighbour + 2]!;
+        pairs++;
+      }
+    }
+  }
+  console.log('edge pixels checked', pairs, 'edge/solid brightness', (edge / solid).toFixed(3));
+  expect(pairs).toBeGreaterThan(500);
+  expect(edge / solid).toBeGreaterThan(0.9);
+  expect(edge / solid).toBeLessThan(1.1);
+
+  // Kept for looking at by eye: the head over black, white and magenta.
+  const head = { x: Math.round(width * 0.3), y: 0, width: Math.round(width * 0.4), height: Math.round(height * 0.14) };
+  const crop = {
+    width: head.width,
+    height: head.height,
+    pixels: new Uint8Array(head.width * head.height * 4),
+  };
+  for (let y = 0; y < head.height; y++) {
+    crop.pixels.set(pixels.subarray(((head.y + y) * width + head.x) * 4, ((head.y + y) * width + head.x + head.width) * 4), y * head.width * 4);
+  }
+  writePng('test-results/export-head-black.png', over(crop, [0, 0, 0]));
+  writePng('test-results/export-head-white.png', over(crop, [255, 255, 255]));
+  writePng('test-results/export-head-magenta.png', over(crop, [255, 0, 255]));
+
+  // Uncropped: the canvas's shape, 3840 tall.
+  await page.locator('#tight').uncheck();
+  const full = await save('export-full');
+  expect(full.height).toBe(3840);
+  expect(full.width).toBe(2880);
 });
 
 test('reads a folder dropped on the page, network off', async ({ page }) => {

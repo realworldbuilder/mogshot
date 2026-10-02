@@ -3,7 +3,8 @@ import { describeFile, formatBytes } from './app/describe';
 import { InstallError, type OpenStage } from './casc/storage';
 import { filesFromDroppedFolder } from './io/dropped-folder';
 import { type PickedFile, pickedFiles } from './io/file-list-source';
-import { CharacterRenderer } from './render/renderer';
+import { encodePng, unpremultiply } from './render/export';
+import { CharacterRenderer, DEFAULT_CAMERA } from './render/renderer';
 import type { CharacterResult, OpenResult, ProbeResult, TableSummary } from './worker/api';
 import { DataClient, DataError } from './worker/client';
 
@@ -57,6 +58,11 @@ app.innerHTML = `
     <div class="stage"><canvas id="canvas" width="960" height="1280"></canvas></div>
     <p class="dim small" id="character-note"></p>
     <div id="character-problems"></div>
+    <div class="actions">
+      <button class="primary" id="download">Download PNG</button>
+      <label class="small"><input type="checkbox" id="tight" checked /> Crop tightly to the character</label>
+    </div>
+    <p class="dim small" id="export-note">A transparent PNG, 3840 pixels on its longer side.</p>
   </section>
 
   <section class="panel" id="result" hidden></section>
@@ -74,6 +80,9 @@ const character = document.querySelector<HTMLElement>('#character')!;
 const characterNote = document.querySelector<HTMLElement>('#character-note')!;
 const characterProblems = document.querySelector<HTMLElement>('#character-problems')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#canvas')!;
+const download = document.querySelector<HTMLButtonElement>('#download')!;
+const tight = document.querySelector<HTMLInputElement>('#tight')!;
+const exportNote = document.querySelector<HTMLElement>('#export-note')!;
 const drop = document.querySelector<HTMLElement>('#drop')!;
 const folder = document.querySelector<HTMLInputElement>('#folder')!;
 
@@ -113,6 +122,8 @@ function showCharacter(built: CharacterResult): void {
 function showCharacterError(error: unknown): void {
   character.hidden = false;
   canvas.parentElement!.hidden = true;
+  download.parentElement!.hidden = true;
+  exportNote.hidden = true;
   characterNote.textContent = '';
   characterProblems.innerHTML = `<p class="bad">The character could not be drawn: ${escapeHtml(messageOf(error))}</p>`;
 }
@@ -197,6 +208,8 @@ async function openFolder(files: PickedFile[], product?: string): Promise<void> 
   character.hidden = true;
   result.hidden = true;
   canvas.parentElement!.hidden = false;
+  download.parentElement!.hidden = false;
+  exportNote.hidden = false;
   try {
     showStatus(STAGE_TEXT.config);
     const opened = await data.open(files, product, (stage) => showStatus(STAGE_TEXT[stage]));
@@ -225,6 +238,38 @@ async function openFolder(files: PickedFile[], product?: string): Promise<void> 
     busy = false;
   }
 }
+
+/** Longer side of the exported picture, in pixels. */
+const EXPORT_LONG_SIDE = 3840;
+
+download.addEventListener('click', async () => {
+  if (!renderer) return;
+  download.disabled = true;
+  try {
+    const start = performance.now();
+    const image = renderer.renderImage(DEFAULT_CAMERA, {
+      longSide: EXPORT_LONG_SIDE,
+      aspect: canvas.width / canvas.height,
+      tight: tight.checked,
+    });
+    unpremultiply(image.pixels);
+    const png = await encodePng(image);
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([png as BlobPart], { type: 'image/png' }));
+    link.download = 'mogshot-human-male.png';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+    exportNote.className = 'dim small';
+    exportNote.textContent =
+      `Saved ${image.width.toLocaleString()} × ${image.height.toLocaleString()} pixels ` +
+      `(${(png.length / 1024 / 1024).toFixed(1)} MB) in ${((performance.now() - start) / 1000).toFixed(1)} s.`;
+  } catch (error) {
+    exportNote.className = 'bad small';
+    exportNote.textContent = `The picture could not be exported: ${messageOf(error)}`;
+  } finally {
+    download.disabled = false;
+  }
+});
 
 folder.addEventListener('change', () => {
   if (!folder.files || folder.files.length === 0) return;
