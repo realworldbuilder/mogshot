@@ -18,7 +18,7 @@ body {
 }
 
 main {
-  max-width: 720px;
+  max-width: 980px;
   margin: 0 auto;
   padding: 48px 16px 32px;
 }
@@ -156,4 +156,70 @@ footer {
 ul {
   margin: 0 0 12px;
   padding-left: 20px;
+}
+
+.viewer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .viewer {
+    grid-template-columns: 1fr;
+  }
+}
+
+.stage canvas.building {
+  opacity: 0.6;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field > span {
+  font-size: 0.8rem;
+  color: var(--dim);
+}
+
+select {
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.segments {
+  display: flex;
+  gap: 6px;
+}
+
+.segments button {
+  flex: 1;
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.segments button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.panel.over {
+  border-color: var(--accent);
 }
