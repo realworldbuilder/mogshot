@@ -32,17 +32,22 @@ export interface OpenOptions {
 /** The folder is not a WoW install, or not one we can read. The message is shown to the user. */
 export class InstallError extends Error {}
 
+/** Why a folder with these top-level entries is not a readable WoW folder. */
+export function notInstallMessage(rootNames: string[]): string {
+  const names = rootNames.map((name) => name.toLowerCase());
+  const hint =
+    names.includes('data') && names.includes('config')
+      ? ' You picked the Data folder; pick the folder that contains it.'
+      : names.some((name) => /^_.+_$/.test(name)) || names.includes('data')
+        ? ' The folder looks like a WoW install that has never been launched or updated.'
+        : '';
+  return `This folder has no .build.info file, so it is not a World of Warcraft folder.${hint}`;
+}
+
 /** The products listed in a folder's `.build.info`. */
 export async function listProducts(source: ByteSource): Promise<BuildInfoEntry[]> {
   const rootNames = await source.list('');
-  if (!rootNames.includes('.build.info')) {
-    const hint = rootNames.includes('data') && rootNames.includes('config')
-      ? ' You picked the Data folder; pick the folder that contains it.'
-      : rootNames.some((name) => /^_.+_$/.test(name)) || rootNames.includes('Data')
-        ? ' The folder looks like a WoW install that has never been launched or updated.'
-        : '';
-    throw new InstallError(`This folder has no .build.info file, so it is not a World of Warcraft folder.${hint}`);
-  }
+  if (!rootNames.includes('.build.info')) throw new InstallError(notInstallMessage(rootNames));
   return parseBuildInfo(await readText(source, '.build.info'));
 }
 
