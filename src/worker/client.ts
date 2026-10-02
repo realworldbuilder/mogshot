@@ -1,6 +1,6 @@
 import type { OpenStage } from '../casc/storage';
 import type { PickedFile } from '../io/file-list-source';
-import type { CharacterResult, OpenResult, Race, Request, Response } from './api';
+import type { CharacterResult, IconResult, ItemSearchResult, OpenResult, Race, Request, Response, Slot } from './api';
 
 /** An error the worker raised. `install` means the folder itself is the problem. */
 export class DataError extends Error {
@@ -51,8 +51,15 @@ export class DataClient {
     return this.call({ method: 'races' });
   }
 
-  character(raceId: number, sex: number, choices: [number, number][]): Promise<CharacterResult> {
-    return this.call({ method: 'character', raceId, sex, choices });
+  character(raceId: number, sex: number, choices: [number, number][], gear: [Slot, number][]): Promise<CharacterResult> {
+    return this.call({ method: 'character', raceId, sex, choices, gear });
   }
 
+  searchItems(slot: Slot, query: string): Promise<ItemSearchResult> {
+    return this.call({ method: 'searchItems', slot, query });
+  }
+
+  icon(fileId: number): Promise<IconResult> {
+    return this.call({ method: 'icon', fileId });
+  }
 }
