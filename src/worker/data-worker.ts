@@ -108,6 +108,12 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       const value: ItemSearchResult = (await loadEquipment()).search(request.slot, request.query);
       return { value };
     }
+    case 'classes':
+      return { value: (await loadEquipment()).classes(request.raceId) };
+    case 'sets':
+      return { value: (await loadEquipment()).sets(request.classId) };
+    case 'randomOutfit':
+      return { value: (await loadEquipment()).randomOutfit(request.minQuality) };
     case 'icon': {
       if (!storage) throw new Error('No folder is open');
       const file = request.fileId ? await storage.readFile(request.fileId) : undefined;

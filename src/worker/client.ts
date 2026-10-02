@@ -2,6 +2,9 @@ import type { OpenStage } from '../casc/storage';
 import type { PickedFile } from '../io/file-list-source';
 import type {
   CharacterResult,
+  ClassInfo,
+  ItemSetInfo,
+  ItemSummary,
   IconResult,
   ItemSearchResult,
   OpenResult,
@@ -79,6 +82,18 @@ export class DataClient {
 
   searchItems(slot: Slot, query: string): Promise<ItemSearchResult> {
     return this.call({ method: 'searchItems', slot, query });
+  }
+
+  classes(raceId: number): Promise<ClassInfo[]> {
+    return this.call({ method: 'classes', raceId });
+  }
+
+  sets(classId: number): Promise<ItemSetInfo[]> {
+    return this.call({ method: 'sets', classId });
+  }
+
+  randomOutfit(minQuality: number): Promise<[Slot, ItemSummary][]> {
+    return this.call({ method: 'randomOutfit', minQuality });
   }
 
   icon(fileId: number): Promise<IconResult> {

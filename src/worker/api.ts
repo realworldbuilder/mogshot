@@ -2,7 +2,7 @@ import type { BuildInfoEntry } from '../casc/build-info';
 import type { FileIndexStats } from '../casc/file-index';
 import type { OpenStage, StorageInfo } from '../casc/storage';
 import type { Race } from '../character/appearance';
-import type { ItemSummary, Slot } from '../character/equipment';
+import type { ClassInfo, ItemSetInfo, ItemSummary, Slot } from '../character/equipment';
 import type { Image } from '../formats/blp';
 import type { CharacterScene, PoseRequest, PoseResult } from '../character/scene';
 import type { PickedFile } from '../io/file-list-source';
@@ -29,6 +29,9 @@ export type Request =
     }
   | { id: number; method: 'pose'; sequence: number; time: number }
   | { id: number; method: 'searchItems'; slot: Slot; query: string }
+  | { id: number; method: 'classes'; raceId: number }
+  | { id: number; method: 'sets'; classId: number }
+  | { id: number; method: 'randomOutfit'; minQuality: number }
   | { id: number; method: 'icon'; fileId: number };
 
 export interface ItemSearchResult {
@@ -40,7 +43,7 @@ export interface ItemSearchResult {
 /** An icon's pixels, or undefined if the file cannot be read. */
 export type IconResult = Image | undefined;
 
-export type { ItemSummary, PoseRequest, PoseResult, Race, Slot };
+export type { ClassInfo, ItemSetInfo, ItemSummary, PoseRequest, PoseResult, Race, Slot };
 
 export interface CharacterResult {
   scene: CharacterScene;
