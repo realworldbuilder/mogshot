@@ -1,9 +1,11 @@
 import type { CascStorage } from '../casc/storage';
 import { decodeBlp, type Image } from '../formats/blp';
-import { parseM2, VERTEX_SIZE } from '../formats/m2';
+import { type BoneOffsets, parseBoneFile } from '../formats/bone';
+import { type M2Model, parseM2, VERTEX_SIZE } from '../formats/m2';
 import { parseSkin, type Skin } from '../formats/skin';
+import { identity } from '../math/mat4';
 import { findSequence, poseBones } from '../model/pose';
-import type { Appearance, TextureLayer } from './appearance';
+import type { Appearance, Option, TextureLayer } from './appearance';
 import { composite, type CompositeLayer } from './compositor';
 
 export interface SceneTexture extends Image {
@@ -29,19 +31,28 @@ export interface SceneDraw {
   textures: number[];
 }
 
-/** Everything the renderer needs to draw one posed character. Plain data, so it can cross from the worker. */
-export interface CharacterScene {
+/** The geometry of one model file, posed. */
+export interface SceneMesh {
   /** 48-byte vertices as stored in the model: position, bone weights, bone indices, normal, two UV sets. */
   vertices: Uint8Array;
   indices: Uint16Array;
-  draws: SceneDraw[];
-  textures: SceneTexture[];
   /** One 4x4 matrix per bone for the pose. */
   bones: Float32Array;
+  draws: SceneDraw[];
+}
+
+/** Everything the renderer needs to draw one posed character. Plain data, so it can cross from the worker. */
+export interface CharacterScene {
+  /** The character's own model first, then any models its appearance adds. */
+  meshes: SceneMesh[];
+  textures: SceneTexture[];
   /** Box around the posed, visible geometry. */
   bounds: { min: [number, number, number]; max: [number, number, number] };
   /** Anything that could not be read or resolved. Empty means the picture is complete. */
   problems: string[];
+  /** The appearance options of this race and sex, and the choice in effect for each. */
+  options: Option[];
+  choices: [optionId: number, choiceId: number][];
 }
 
 export interface CharacterRequest {
@@ -54,23 +65,38 @@ export interface CharacterRequest {
 
 /** Geoset groups that are extras (eye glow and the like): hidden unless a choice asks for them. */
 const GROUPS_HIDDEN_BY_DEFAULT = new Set([17, 35]);
+/** The face. Part of it is common to every face shape and is drawn whichever shape is chosen. */
+const GROUP_FACE = 32;
 const ANIMATION_STAND = 0;
 
-/** Which sections of the skin are drawn, given the geosets the choices ask for. */
-export function visibleSections(skin: Skin, requests: readonly { group: number; variant: number }[]): boolean[] {
+/**
+ * Which sections of the skin are drawn.
+ *
+ * A section's ID is group * 100 + variant, and each group shows one variant: variant 1 unless
+ * a choice selects another (bare hands are 401, a glove style 402 ...). A choice that names
+ * variant 0 hides the group. A choice that names a variant the model does not have leaves
+ * the group as it was: hiding it would remove part of the body on some races.
+ *
+ * Two exceptions. Section 0 is part of the body and is always drawn, although "Bald" names
+ * it. And the face group is drawn whole, except that where an option's choices name
+ * variants (face shapes), only the chosen one of those is drawn.
+ */
+export function visibleSections(skin: Skin, toggles: readonly { id: number; visible: boolean }[]): boolean[] {
   const present = new Set(skin.sections.map((section) => section.id));
-  const active = new Map<number, number>();
-  for (const { group, variant } of requests) {
-    // Variant 0 means none of the group. A variant this model does not have leaves the
-    // group as it was: hiding it would remove part of the body on some races.
-    if (variant === 0 || present.has(group * 100 + variant)) active.set(group, variant);
+  const named = new Set<number>();
+  const selected = new Map<number, number>();
+  for (const { id, visible } of toggles) {
+    named.add(id);
+    if (!visible) continue;
+    const variant = id % 100;
+    if (variant === 0 || present.has(id)) selected.set(Math.floor(id / 100), variant);
   }
   return skin.sections.map(({ id }) => {
-    // Section 0 is part of the body (shoulders and upper arms on newer models), not a hair style.
     if (id === 0) return true;
     const group = Math.floor(id / 100);
-    const fallback = GROUPS_HIDDEN_BY_DEFAULT.has(group) ? 0 : 1;
-    return id % 100 === (active.get(group) ?? fallback);
+    const variant = id % 100;
+    if (group === GROUP_FACE) return !named.has(id) || selected.get(group) === variant;
+    return variant === (selected.get(group) ?? (GROUPS_HIDDEN_BY_DEFAULT.has(group) ? 0 : 1));
   });
 }
 
@@ -84,6 +110,33 @@ function compositeScale(layers: readonly { layer: TextureLayer; image: Image }[]
   let power = 1;
   while (power / 2 >= scale) power /= 2;
   return Math.min(1, power);
+}
+
+/**
+ * Bone matrices for a model that is worn by the character rather than animated itself.
+ * Each of its bones takes the matrix of the character's bone with the same name; a bone
+ * the character lacks follows its parent.
+ */
+function wornBones(model: M2Model, body: M2Model, bodyBones: Float32Array): Float32Array {
+  const bodyIndex = new Map<number, number>();
+  body.bones.forEach((bone, i) => {
+    if (!bodyIndex.has(bone.nameHash)) bodyIndex.set(bone.nameHash, i);
+  });
+  const out = new Float32Array(model.bones.length * 16);
+  const done = new Uint8Array(model.bones.length);
+  const solve = (i: number): Float32Array => {
+    const matrix = out.subarray(i * 16, i * 16 + 16);
+    if (done[i]) return matrix;
+    done[i] = 1;
+    const bone = model.bones[i]!;
+    const match = bodyIndex.get(bone.nameHash);
+    if (match !== undefined) matrix.set(bodyBones.subarray(match * 16, match * 16 + 16));
+    else if (bone.parent >= 0) matrix.set(solve(bone.parent));
+    else identity(matrix);
+    return matrix;
+  };
+  for (let i = 0; i < model.bones.length; i++) solve(i);
+  return out;
 }
 
 export async function buildCharacterScene(
@@ -105,20 +158,29 @@ export async function buildCharacterScene(
     if (file.encrypted.length > 0) problems.push(`${what} (file ${fileId}) is partly encrypted`);
     return file.data;
   };
+  const readModel = async (fileId: number, what: string): Promise<{ model: M2Model; skin: Skin } | undefined> => {
+    const modelBytes = await read(fileId, what);
+    if (!modelBytes) return undefined;
+    const model = parseM2(modelBytes);
+    const skinBytes = await read(model.skinFileIds[0] ?? 0, `${what}'s skin`);
+    return skinBytes && { model, skin: parseSkin(skinBytes) };
+  };
 
-  const modelBytes = await read(characterModel.fileId, 'The character model');
-  if (!modelBytes) throw new Error(problems[0]);
-  const model = parseM2(modelBytes);
-  const skinBytes = await read(model.skinFileIds[0] ?? 0, 'The model skin');
-  if (!skinBytes) throw new Error(problems[problems.length - 1]);
-  const skin = parseSkin(skinBytes);
+  const body = await readModel(characterModel.fileId, 'The character model');
+  if (!body) throw new Error(problems[problems.length - 1]);
+  const { model, skin } = body;
+  if (model.skeletonFileId !== 0) {
+    throw new Error('This model keeps its skeleton in a separate file, which Mogshot cannot read yet');
+  }
 
+  const options = appearance.options(characterModel.chrModelId);
   const choices = new Map(appearance.defaultChoices(characterModel.chrModelId));
-  for (const [option, choice] of request.choices ?? []) choices.set(option, choice);
+  for (const [option, choice] of request.choices ?? []) {
+    // Ignore choices that belong to another race or sex.
+    if (options.some((o) => o.id === option && o.choices.some((c) => c.id === choice))) choices.set(option, choice);
+  }
   const resolved = appearance.resolve(characterModel, choices);
   problems.push(...resolved.problems);
-  if (resolved.boneSets.length > 0) problems.push('Face shape: bone sets are not applied yet, so the face keeps its base shape');
-  if (resolved.skinnedModels.length > 0) problems.push('An appearance choice attaches a model, which is not drawn yet');
 
   // Composite one texture per slot from the layers the choices produce.
   const images = new Map<number, Image | undefined>();
@@ -151,73 +213,115 @@ export async function buildCharacterScene(
     slots.set(type, composite(first.layer.canvasWidth * scale, first.layer.canvasHeight * scale, layers));
   }
 
-  // Draw list: the batches of visible sections, with their textures.
-  const visible = visibleSections(skin, resolved.geosets);
+  // Scene textures are shared between meshes: a slot (skin, hair ...) or a file is uploaded once.
   const textures: SceneTexture[] = [];
-  const sceneTextureOf = new Map<number, number>();
-  const textureFor = async (modelTexture: number, sectionId: number): Promise<number> => {
-    const known = sceneTextureOf.get(modelTexture);
+  const sceneTextureOf = new Map<string, number>();
+  const textureFor = async (source: M2Model, modelTexture: number, sectionId: number): Promise<number> => {
+    const texture = source.textures[modelTexture];
+    if (!texture) {
+      problems.push(`Geoset ${sectionId} uses texture ${modelTexture}, which the model does not have`);
+      return -1;
+    }
+    const key = `${texture.type === 0 ? `file:${texture.fileId}` : `slot:${texture.type}`}:${texture.flags & 3}`;
+    const known = sceneTextureOf.get(key);
     if (known !== undefined) return known;
-    const texture = model.textures[modelTexture];
     let picture: Image | undefined;
-    if (!texture) problems.push(`Geoset ${sectionId} uses texture ${modelTexture}, which the model does not have`);
-    else if (texture.type === 0) picture = await image(texture.fileId, 'A model texture');
+    if (texture.type === 0) picture = await image(texture.fileId, 'A model texture');
     else {
       picture = slots.get(texture.type);
       if (!picture) problems.push(`Geoset ${sectionId} needs a texture for slot ${texture.type}, and nothing fills it`);
     }
     let index = -1;
-    if (picture && texture) {
+    if (picture) {
       index = textures.length;
       textures.push({ ...picture, wrapX: (texture.flags & 1) !== 0, wrapY: (texture.flags & 2) !== 0 });
     }
-    sceneTextureOf.set(modelTexture, index);
+    sceneTextureOf.set(key, index);
     return index;
   };
 
-  const draws: SceneDraw[] = [];
-  for (const batch of skin.batches) {
-    if (!visible[batch.sectionIndex]) continue;
-    const section = skin.sections[batch.sectionIndex]!;
-    const material = model.materials[batch.materialIndex];
-    const stageTextures: number[] = [];
-    for (let stage = 0; stage < Math.min(batch.textureCount, 4); stage++) {
-      const modelTexture = model.textureCombos[batch.textureComboIndex + stage];
-      stageTextures.push(modelTexture === undefined ? -1 : await textureFor(modelTexture, section.id));
-    }
-    draws.push({
-      sectionId: section.id,
-      indexStart: section.indexStart,
-      indexCount: section.indexCount,
-      shaderId: batch.shaderId,
-      textureCount: batch.textureCount,
-      blendMode: material?.blendMode ?? 0,
-      materialFlags: material?.flags ?? 0,
-      priority: batch.priority,
-      layer: batch.materialLayer,
-      textures: stageTextures,
-    });
-  }
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
 
-  // The skin uses a prefix of the model's vertices; triangles index them through its lookup.
-  let vertexCount = 0;
-  for (const v of skin.vertexLookup) if (v >= vertexCount) vertexCount = v + 1;
-  const vertices = model.vertices.slice(0, vertexCount * VERTEX_SIZE);
-  const indices = new Uint16Array(skin.indices.length);
-  for (let i = 0; i < indices.length; i++) indices[i] = skin.vertexLookup[skin.indices[i]!]!;
+  const buildMesh = async (source: M2Model, sourceSkin: Skin, visible: boolean[], bones: Float32Array): Promise<SceneMesh> => {
+    const draws: SceneDraw[] = [];
+    for (const batch of sourceSkin.batches) {
+      if (!visible[batch.sectionIndex]) continue;
+      const section = sourceSkin.sections[batch.sectionIndex]!;
+      const material = source.materials[batch.materialIndex];
+      const stageTextures: number[] = [];
+      for (let stage = 0; stage < Math.min(batch.textureCount, 4); stage++) {
+        const modelTexture = source.textureCombos[batch.textureComboIndex + stage];
+        stageTextures.push(modelTexture === undefined ? -1 : await textureFor(source, modelTexture, section.id));
+      }
+      draws.push({
+        sectionId: section.id,
+        indexStart: section.indexStart,
+        indexCount: section.indexCount,
+        shaderId: batch.shaderId,
+        textureCount: batch.textureCount,
+        blendMode: material?.blendMode ?? 0,
+        materialFlags: material?.flags ?? 0,
+        priority: batch.priority,
+        layer: batch.materialLayer,
+        textures: stageTextures,
+      });
+    }
+    // The skin uses a prefix of the model's vertices; triangles index them through its lookup.
+    let vertexCount = 0;
+    for (const v of sourceSkin.vertexLookup) if (v >= vertexCount) vertexCount = v + 1;
+    const vertices = source.vertices.slice(0, vertexCount * VERTEX_SIZE);
+    const indices = new Uint16Array(sourceSkin.indices.length);
+    for (let i = 0; i < indices.length; i++) indices[i] = sourceSkin.vertexLookup[sourceSkin.indices[i]!]!;
+    growBounds(min, max, vertices, sourceSkin, visible, bones);
+    return { vertices, indices, bones, draws };
+  };
+
+  // Face shapes and the like: adjustments to some bones, merged in the order the choices give them.
+  const boneOffsets: BoneOffsets = new Map();
+  for (const fileId of resolved.boneFiles) {
+    // The game data names some adjustment files that no build contains; the game shows
+    // the base shape for those, so they are not a fault in the picture.
+    if (!storage.files.find(fileId) && !storage.files.isMissing(fileId)) continue;
+    const bytes = await read(fileId, 'A face shape');
+    if (!bytes) continue;
+    for (const [bone, matrix] of parseBoneFile(bytes)) boneOffsets.set(bone, matrix);
+  }
 
   const stand = findSequence(model.sequences, ANIMATION_STAND);
   if (stand < 0) problems.push('The model has no Stand animation, so it is shown in its rest pose');
-  const bones = poseBones(model, stand, 0);
+  const bones = poseBones(model, stand, 0, undefined, boneOffsets);
 
-  return { vertices, indices, draws, textures, bones, bounds: posedBounds(vertices, skin, visible, bones), problems };
+  const meshes = [await buildMesh(model, skin, visibleSections(skin, resolved.geosets), bones)];
+
+  // Models the choices add (horns, jewellery, body parts of some races), one mesh per file.
+  const wanted = new Map<number, Set<number>>();
+  for (const { fileId, group, variant } of resolved.skinnedModels) {
+    let ids = wanted.get(fileId);
+    if (!ids) wanted.set(fileId, (ids = new Set()));
+    ids.add(group * 100 + variant);
+  }
+  for (const [fileId, ids] of wanted) {
+    const extra = await readModel(fileId, 'An appearance model');
+    if (!extra) continue;
+    const visible = extra.skin.sections.map((section) => ids.has(section.id));
+    if (!visible.some(Boolean)) continue;
+    meshes.push(await buildMesh(extra.model, extra.skin, visible, wornBones(extra.model, model, bones)));
+  }
+
+  return { meshes, textures, bounds: { min, max }, problems, options, choices: [...choices] };
 }
 
-/** Box around the vertices of the visible sections after posing. */
-function posedBounds(vertices: Uint8Array, skin: Skin, visible: boolean[], bones: Float32Array): CharacterScene['bounds'] {
+/** Grow a box to include the vertices of the visible sections after posing. */
+function growBounds(
+  min: [number, number, number],
+  max: [number, number, number],
+  vertices: Uint8Array,
+  skin: Skin,
+  visible: boolean[],
+  bones: Float32Array,
+): void {
   const dv = new DataView(vertices.buffer, vertices.byteOffset, vertices.byteLength);
-  const min: [number, number, number] = [Infinity, Infinity, Infinity];
-  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
   skin.sections.forEach((section, sectionIndex) => {
     if (!visible[sectionIndex]) return;
     for (let v = section.vertexStart; v < section.vertexStart + section.vertexCount; v++) {
@@ -244,5 +348,4 @@ function posedBounds(vertices: Uint8Array, skin: Skin, visible: boolean[], bones
       }
     }
   });
-  return { min, max };
 }
