@@ -9,6 +9,9 @@ import { cachedFetch } from '../cached-fetch';
 import { hasClient, NodeSource, WOW_DIR } from '../node-source';
 import { writePng } from '../png';
 
+/** Build a character and return just the scene. */
+const buildScene = async (...args: Parameters<typeof buildCharacterScene>) => (await buildCharacterScene(...args)).scene;
+
 // Needs a game install. Reported as skipped, not passed, when there is none.
 describe.skipIf(!hasClient)('human male scene', () => {
   let storage: Storage;
@@ -23,7 +26,7 @@ describe.skipIf(!hasClient)('human male scene', () => {
       return text;
     });
     appearance = await Appearance.load(new Database(storage, definitions));
-    scene = await buildCharacterScene(storage, appearance, undefined, { raceId: 1, sex: 0 });
+    scene = await buildScene(storage, appearance, undefined, { raceId: 1, sex: 0 });
     // Kept for looking at by eye; test-results/ is not committed.
     scene.textures.forEach((texture, i) => writePng(`test-results/scene/texture-${i}.png`, texture));
   }, 120_000);
@@ -75,7 +78,7 @@ describe.skipIf(!hasClient)('human male scene', () => {
     const report: string[] = [];
     for (const race of appearance.races) {
       for (const sex of race.sexes) {
-        const built = await buildCharacterScene(storage, appearance, undefined, { raceId: race.id, sex });
+        const built = await buildScene(storage, appearance, undefined, { raceId: race.id, sex });
         const draws = built.meshes.flatMap((mesh) => mesh.draws);
         const untextured = draws.filter((d) => d.textures.some((t) => t < 0)).map((d) => d.sectionId);
         const height = built.bounds.max[2] - built.bounds.min[2];

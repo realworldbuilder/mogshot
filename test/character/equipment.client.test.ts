@@ -8,6 +8,9 @@ import { Definitions } from '../../src/db2/definitions';
 import { cachedFetch } from '../cached-fetch';
 import { hasClient, NodeSource, WOW_DIR } from '../node-source';
 
+/** Build a character and return just the scene. */
+const buildScene = async (...args: Parameters<typeof buildCharacterScene>) => (await buildCharacterScene(...args)).scene;
+
 // Needs a game install. Reported as skipped, not passed, when there is none.
 describe.skipIf(!hasClient)('gear', () => {
   let storage: CascStorage;
@@ -68,8 +71,8 @@ describe.skipIf(!hasClient)('gear', () => {
       ['chest', find('chest', 'Robe of the Archmage').id],
       ['mainHand', find('mainHand', 'Thunderfury, Blessed Blade of the Windseeker').id],
     ]);
-    const bare = await buildCharacterScene(storage, appearance, equipment, { raceId: 1, sex: 0 });
-    const dressed = await buildCharacterScene(storage, appearance, equipment, { raceId: 1, sex: 0, gear });
+    const bare = await buildScene(storage, appearance, equipment, { raceId: 1, sex: 0 });
+    const dressed = await buildScene(storage, appearance, equipment, { raceId: 1, sex: 0, gear });
     expect(dressed.problems).toEqual([]);
     // The body, the helm and the sword.
     expect(dressed.meshes).toHaveLength(3);
@@ -92,7 +95,7 @@ describe.skipIf(!hasClient)('gear', () => {
     const legs = find('legs', 'Dreadnaught Legplates').id;
     const robe = find('chest', 'Frostfire Robe').id;
     const sections = async (gear: [Slot, number][]) => {
-      const scene = await buildCharacterScene(storage, appearance, equipment, { raceId: 1, sex: 0, gear: new Map(gear) });
+      const scene = await buildScene(storage, appearance, equipment, { raceId: 1, sex: 0, gear: new Map(gear) });
       expect(scene.problems).toEqual([]);
       return scene.meshes[0]!.draws.map((d) => d.sectionId);
     };
@@ -105,7 +108,7 @@ describe.skipIf(!hasClient)('gear', () => {
   });
 
   it('names the item when something of it cannot be found', async () => {
-    const scene = await buildCharacterScene(storage, appearance, equipment, {
+    const scene = await buildScene(storage, appearance, equipment, {
       raceId: 1,
       sex: 0,
       gear: new Map<Slot, number>([['head', 999_999_999]]),
@@ -148,7 +151,7 @@ describe.skipIf(!hasClient)('gear', () => {
       for (let i = 0; i < all.length; i += 25) {
         const item = all[i]!;
         const [raceId, sex] = combos[built % combos.length]!;
-        const scene = await buildCharacterScene(storage, appearance, equipment, { raceId, sex, gear: new Map([[slot.id, item.id]]) });
+        const scene = await buildScene(storage, appearance, equipment, { raceId, sex, gear: new Map([[slot.id, item.id]]) });
         built++;
         const untextured = scene.meshes.flatMap((mesh) => mesh.draws).filter((draw) => draw.textures.some((t) => t < 0));
         // Anything unreadable must have been reported; nothing may be silently untextured.
