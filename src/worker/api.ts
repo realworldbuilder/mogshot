@@ -1,6 +1,7 @@
 import type { BuildInfoEntry } from '../casc/build-info';
 import type { FileIndexStats } from '../casc/file-index';
 import type { OpenStage, StorageInfo } from '../casc/storage';
+import type { Race } from '../character/appearance';
 import type { CharacterScene } from '../character/scene';
 import type { PickedFile } from '../io/file-list-source';
 
@@ -12,30 +13,12 @@ export interface OpenResult {
   ms: number;
 }
 
-export interface ProbeResult {
-  /** 'missing' = the build lists the file but it is not installed; 'unknown' = not in this build. */
-  status: 'ok' | 'missing' | 'unknown';
-  size: number;
-  /** First bytes of the decoded file. */
-  head: Uint8Array;
-  encryptedChunks: number;
-  highRes: boolean;
-  highResMissing: boolean;
-  ms: number;
-}
-
-export interface TableSummary {
-  rows: number;
-  /** Rows in sections that are encrypted with keys nobody has published. */
-  encryptedRows: number;
-  ms: number;
-}
-
 export type Request =
   | { id: number; method: 'open'; files: PickedFile[]; product?: string }
-  | { id: number; method: 'probe'; fileId: number }
-  | { id: number; method: 'tableSummary'; table: string }
-  | { id: number; method: 'character'; raceId: number; sex: number };
+  | { id: number; method: 'races' }
+  | { id: number; method: 'character'; raceId: number; sex: number; choices: [optionId: number, choiceId: number][] };
+
+export type { Race };
 
 export interface CharacterResult {
   scene: CharacterScene;
