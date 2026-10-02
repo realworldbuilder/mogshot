@@ -25,6 +25,31 @@ async function openAndDraw(page: Page): Promise<void> {
   await expect(page.locator('#character-note')).toContainText('Built in', { timeout: 60_000 });
 }
 
+/** Do something that changes the character and wait for the new picture to be on the canvas. */
+async function redraw(page: Page, action: () => Promise<unknown>): Promise<void> {
+  const before = await page.locator('#canvas').getAttribute('data-drawn');
+  await action();
+  await expect(page.locator('#canvas')).not.toHaveAttribute('data-drawn', before ?? '', { timeout: 30_000 });
+  await expect(page.locator('#canvas.building')).toHaveCount(0);
+}
+
+/** Put an item in a slot by searching for its name, as a user would. */
+async function equip(page: Page, slot: string, name: string): Promise<void> {
+  const row = page.locator(`[data-slot="${slot}"]`);
+  await row.locator('.slot-pick').click();
+  await row.locator('input').fill(name);
+  const result = row.locator('.results button').filter({ has: page.getByText(name, { exact: true }) }).first();
+  await redraw(page, () => result.click());
+  await expect(row.locator('.item-name')).toHaveText(name);
+}
+
+/** Problems the page lists for the character on screen. */
+async function problemsShown(page: Page): Promise<string[]> {
+  const problems = await page.locator('#character-problems li').allInnerTexts();
+  if (await page.locator('#character-error').count()) problems.push(await page.locator('#character-error').innerText());
+  return problems;
+}
+
 /** A real file drag from the OS, injected through the DevTools protocol. */
 async function dropFolder(page: Page, path: string): Promise<void> {
   const cdp = await page.context().newCDPSession(page);
@@ -76,30 +101,100 @@ test('draws a human male first, with nothing missing', async ({ page }) => {
   await page.screenshot({ path: 'test-results/page.png', fullPage: true });
 });
 
+/** Step through every race and sex, saving a picture of each and collecting anything reported missing. */
+async function everyRace(page: Page, folder: string): Promise<string[]> {
+  const races = await page.locator('#race option').allInnerTexts();
+  expect(races.length).toBeGreaterThanOrEqual(8);
+  const missing: string[] = [];
+  let first = true;
+  for (const race of races) {
+    for (const sex of ['Male', 'Female']) {
+      const select = async () => {
+        await page.locator('#race').selectOption({ label: race });
+        await page.locator('#sex button', { hasText: new RegExp(`^${sex}$`) }).click();
+      };
+      // The first combination is already on screen.
+      if (first) await select();
+      else await redraw(page, select);
+      first = false;
+      const name = `${race} ${sex}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      await page.locator('#canvas').screenshot({ path: `test-results/${folder}/${name}.png` });
+      for (const problem of await problemsShown(page)) missing.push(`${race} ${sex}: ${problem}`);
+    }
+  }
+  return missing;
+}
+
 test('draws every race and sex with nothing missing', async ({ page }) => {
   test.setTimeout(300_000);
   await load(page, false);
   await openAndDraw(page);
-  const races = await page.locator('#race option').allInnerTexts();
-  expect(races.length).toBeGreaterThanOrEqual(8);
-  const missing: string[] = [];
-  for (const race of races) {
-    await page.locator('#race').selectOption({ label: race });
-    for (const sex of await page.locator('#sex button').allInnerTexts()) {
-      await page.locator('#sex button', { hasText: new RegExp(`^${sex}$`) }).click();
-      // Wait for this character, not the previous one, to be on the canvas.
-      await expect(page.locator('#canvas.building')).toHaveCount(0);
-      await expect(page.locator('#sex .on')).toHaveText(sex);
-      await page.waitForTimeout(150);
-      await expect(page.locator('#canvas.building')).toHaveCount(0);
-      const name = `${race} ${sex}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-      await page.locator('#canvas').screenshot({ path: `test-results/races/${name}.png` });
-      const problems = await page.locator('#character-problems li').allInnerTexts();
-      if (problems.length > 0) missing.push(`${race} ${sex}: ${problems.join('; ')}`);
-      if (await page.locator('#character-error').count()) missing.push(`${race} ${sex}: ${await page.locator('#character-error').innerText()}`);
-    }
-  }
-  expect(missing).toEqual([]);
+  expect(await everyRace(page, 'races')).toEqual([]);
+});
+
+const PLATE: [slot: string, name: string][] = [
+  ['head', 'Dreadnaught Helmet'],
+  ['shoulder', 'Dreadnaught Pauldrons'],
+  ['back', 'Cloak of the Fallen God'],
+  ['chest', 'Dreadnaught Breastplate'],
+  ['wrist', 'Dreadnaught Bracers'],
+  ['hands', 'Dreadnaught Gauntlets'],
+  ['waist', 'Dreadnaught Waistguard'],
+  ['legs', 'Dreadnaught Legplates'],
+  ['feet', 'Dreadnaught Sabatons'],
+  ['mainHand', 'Thunderfury, Blessed Blade of the Windseeker'],
+  ['offHand', 'Blessed Qiraji Bulwark'],
+];
+
+const CLOTH: [slot: string, name: string][] = [
+  ['head', 'Frostfire Circlet'],
+  ['shoulder', 'Frostfire Shoulderpads'],
+  ['chest', 'Frostfire Robe'],
+  ['shirt', "Recruit's Shirt"],
+  ['tabard', 'Tabard of Mastery'],
+  ['wrist', 'Frostfire Bindings'],
+  ['hands', 'Frostfire Gloves'],
+  ['waist', 'Frostfire Belt'],
+  ['legs', 'Frostfire Leggings'],
+  ['feet', 'Frostfire Sandals'],
+  ['mainHand', 'Atiesh, Greatstaff of the Guardian'],
+];
+
+const MAIL: [slot: string, name: string][] = [
+  ['head', 'Cryptstalker Headpiece'],
+  ['shoulder', 'Cryptstalker Spaulders'],
+  ['back', 'Shifting Cloak'],
+  ['chest', 'Cryptstalker Tunic'],
+  ['wrist', 'Cryptstalker Wristguards'],
+  ['hands', 'Cryptstalker Handguards'],
+  ['waist', 'Cryptstalker Girdle'],
+  ['legs', 'Cryptstalker Legguards'],
+  ['feet', 'Cryptstalker Boots'],
+  ['mainHand', "Rhok'delar, Longbow of the Ancient Keepers"],
+];
+
+for (const [outfit, items] of [['plate', PLATE], ['cloth', CLOTH], ['mail', MAIL]] as const) {
+  test(`dresses every race and sex in ${outfit} with nothing missing`, async ({ page }) => {
+    test.setTimeout(600_000);
+    await load(page, false);
+    await openAndDraw(page);
+    for (const [slot, name] of items) await equip(page, slot, name);
+    // Every slot shows the item's icon once it is equipped.
+    await expect(page.locator('#gear .slot-pick canvas.icon')).toHaveCount(items.length);
+    await page.screenshot({ path: `test-results/page-${outfit}.png`, fullPage: true });
+    expect(await everyRace(page, outfit)).toEqual([]);
+  });
+}
+
+test('removes an item', async ({ page }) => {
+  await load(page, false);
+  await openAndDraw(page);
+  const before = await page.locator('#canvas').screenshot();
+  await equip(page, 'chest', 'Frostfire Robe');
+  expect((await page.locator('#canvas').screenshot()).equals(before)).toBe(false);
+  await redraw(page, () => page.locator('[data-slot="chest"] .slot-clear').click());
+  await expect(page.locator('[data-slot="chest"] .item-name')).toHaveText('Empty');
+  expect((await page.locator('#canvas').screenshot()).equals(before)).toBe(true);
 });
 
 test('changes the picture when an appearance choice changes', async ({ page }) => {
@@ -107,9 +202,7 @@ test('changes the picture when an appearance choice changes', async ({ page }) =
   await openAndDraw(page);
   const before = await page.locator('#canvas').screenshot();
   const hair = page.locator('select[data-option="Hair Style"]');
-  await hair.selectOption({ index: 3 });
-  await expect(page.locator('#canvas.building')).toHaveCount(0);
-  await page.waitForTimeout(300);
+  await redraw(page, () => hair.selectOption({ index: 3 }));
   const after = await page.locator('#canvas').screenshot({ path: 'test-results/human-male-hair.png' });
   expect(after.equals(before)).toBe(false);
   await expect(page.locator('#character-problems')).toHaveCount(0);
@@ -187,4 +280,33 @@ test('exports a clean transparent PNG', async ({ page }) => {
   const full = await save('export-full');
   expect(full.height).toBe(3840);
   expect(full.width).toBe(2880);
+});
+
+test('exports a glowing weapon with its glow as transparency', async ({ page }) => {
+  await load(page, false);
+  await openAndDraw(page);
+  await equip(page, 'mainHand', 'Thunderfury, Blessed Blade of the Windseeker');
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#download').click()]);
+  await download.saveAs('test-results/export-glow.png');
+  const image = decodePng(readFileSync('test-results/export-glow.png'));
+
+  // The glow is additive light: partly transparent pixels that are bright for their coverage.
+  let glow = 0;
+  for (let i = 0; i < image.pixels.length; i += 4) {
+    const alpha = image.pixels[i + 3]!;
+    if (alpha > 10 && alpha < 200 && image.pixels[i + 2]! > 200) glow++;
+  }
+  console.log('glow pixels', glow);
+  expect(glow).toBeGreaterThan(1000);
+
+  // Kept for looking at by eye: the picture, quarter size, over black, white and magenta.
+  const small = { width: image.width >> 2, height: image.height >> 2, pixels: new Uint8Array((image.width >> 2) * (image.height >> 2) * 4) };
+  for (let y = 0; y < small.height; y++) {
+    for (let x = 0; x < small.width; x++) {
+      small.pixels.set(image.pixels.subarray((y * 4 * image.width + x * 4) * 4, (y * 4 * image.width + x * 4) * 4 + 4), (y * small.width + x) * 4);
+    }
+  }
+  writePng('test-results/export-glow-black.png', over(small, [0, 0, 0]));
+  writePng('test-results/export-glow-white.png', over(small, [255, 255, 255]));
+  writePng('test-results/export-glow-magenta.png', over(small, [255, 0, 255]));
 });
