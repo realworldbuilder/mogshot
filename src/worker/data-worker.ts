@@ -1,9 +1,18 @@
 /// <reference lib="webworker" />
 import { CascStorage, InstallError, listProducts } from '../casc/storage';
+import { Database } from '../db2/database';
+import { Definitions } from '../db2/definitions';
 import { FileListSource } from '../io/file-list-source';
-import type { OpenResult, ProbeResult, Request, Response } from './api';
+import type { OpenResult, ProbeResult, Request, Response, TableSummary } from './api';
 
 let storage: CascStorage | undefined;
+let database: Database | undefined;
+
+const definitions = new Definitions(async (url) => {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${url} answered ${response.status}`);
+  return response.text();
+});
 
 const post = (message: Response, transfer: Transferable[] = []) =>
   (self as DedicatedWorkerGlobalScope).postMessage(message, transfer);
@@ -18,6 +27,7 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
         product: request.product,
         onProgress: (stage) => post({ id: request.id, type: 'progress', stage }),
       });
+      database = new Database(storage, definitions);
       const value: OpenResult = {
         info: storage.info,
         stats: storage.files.stats,
@@ -42,6 +52,17 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
         ms: performance.now() - start,
       };
       return { value, transfer: [head.buffer] };
+    }
+    case 'tableSummary': {
+      if (!database) throw new Error('No folder is open');
+      const start = performance.now();
+      const table = await database.table(request.table, []);
+      const value: TableSummary = {
+        rows: table.rows.length,
+        encryptedRows: table.skipped.reduce((n, section) => n + section.rowCount, 0),
+        ms: performance.now() - start,
+      };
+      return { value };
     }
   }
 }

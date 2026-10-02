@@ -3,7 +3,7 @@ import { describeFile, formatBytes } from './app/describe';
 import { InstallError, type OpenStage } from './casc/storage';
 import { filesFromDroppedFolder } from './io/dropped-folder';
 import { type PickedFile, pickedFiles } from './io/file-list-source';
-import type { OpenResult, ProbeResult } from './worker/api';
+import type { OpenResult, ProbeResult, TableSummary } from './worker/api';
 import { DataClient, DataError } from './worker/client';
 
 /** Files read to prove the local archives work: a database table, a model and a texture. */
@@ -32,7 +32,8 @@ app.innerHTML = `
   <section class="panel">
     <h2>Early build: folder check only</h2>
     <p>There is nothing to export yet. This page checks that Mogshot can read your game files.
-    They are read on your computer and are never uploaded.</p>
+    They are read on your computer and are never uploaded. The only thing downloaded is the
+    community's description of the game's database tables, from GitHub.</p>
     ${chromium ? '' : '<p class="bad">Mogshot is only tested in Chrome. It may not work in this browser.</p>'}
     <div id="drop">
       <p><strong>Drag your World of Warcraft folder onto this page</strong></p>
@@ -87,7 +88,21 @@ function probeRow(label: string, fileId: number, probe: ProbeResult): string {
   return `<dt>${escapeHtml(label)} <span class="small">#${fileId}</span></dt><dd>${text}</dd>`;
 }
 
-function showResult(opened: OpenResult, probes: ProbeResult[], files: PickedFile[]): void {
+/** The game database check: races and items, decoded with definitions downloaded from GitHub. */
+type TablesCheck = { races: TableSummary; items: TableSummary } | { error: string };
+
+function tablesRow(check: TablesCheck): string {
+  if ('error' in check) {
+    return `<span class="bad">Not read</span>: the table definitions could not be downloaded from GitHub
+      (${escapeHtml(check.error)}). They are the one thing Mogshot fetches; check your connection and try again.`;
+  }
+  const { races, items } = check;
+  const hidden = items.encryptedRows > 0 ? `; ${items.encryptedRows.toLocaleString()} more are encrypted by Blizzard and unavailable` : '';
+  return `<span class="ok">Read</span> ${races.rows} races and ${items.rows.toLocaleString()} items${hidden}
+    <span class="dim">(${(races.ms + items.ms).toFixed(0)} ms)</span>`;
+}
+
+function showResult(opened: OpenResult, probes: ProbeResult[], tables: TablesCheck, files: PickedFile[]): void {
   const { info, stats, products } = opened;
   const percent = ((stats.onDisk / stats.listed) * 100).toFixed(2);
   const highRes =
@@ -116,6 +131,7 @@ function showResult(opened: OpenResult, probes: ProbeResult[], files: PickedFile
       <dt>High-res textures</dt><dd id="highres">${highRes}</dd>
       <dt>Indexed in</dt><dd id="indexed">${(opened.ms / 1000).toFixed(1)} s</dd>
       ${PROBES.map((probe, i) => probeRow(probe.label, probe.fileId, probes[i]!)).join('')}
+      <dt>Game database</dt><dd id="tables">${tablesRow(tables)}</dd>
     </dl>
   `;
   result.querySelector<HTMLSelectElement>('#product')?.addEventListener('change', (event) => {
@@ -137,7 +153,14 @@ async function openFolder(files: PickedFile[], product?: string): Promise<void> 
     const opened = await data.open(files, product, (stage) => showStatus(STAGE_TEXT[stage]));
     const probes: ProbeResult[] = [];
     for (const probe of PROBES) probes.push(await data.probe(probe.fileId));
-    showResult(opened, probes, files);
+    showStatus('Reading the game database…');
+    let tables: TablesCheck;
+    try {
+      tables = { races: await data.tableSummary('ChrRaces'), items: await data.tableSummary('ItemSparse') };
+    } catch (error) {
+      tables = { error: error instanceof Error ? error.message : String(error) };
+    }
+    showResult(opened, probes, tables, files);
   } catch (error) {
     showError(error);
   } finally {

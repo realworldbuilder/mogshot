@@ -23,9 +23,17 @@ export interface ProbeResult {
   ms: number;
 }
 
+export interface TableSummary {
+  rows: number;
+  /** Rows in sections that are encrypted with keys nobody has published. */
+  encryptedRows: number;
+  ms: number;
+}
+
 export type Request =
   | { id: number; method: 'open'; files: PickedFile[]; product?: string }
-  | { id: number; method: 'probe'; fileId: number };
+  | { id: number; method: 'probe'; fileId: number }
+  | { id: number; method: 'tableSummary'; table: string };
 
 export type Response =
   | { id: number; type: 'progress'; stage: OpenStage }
