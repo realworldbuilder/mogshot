@@ -129,6 +129,12 @@ export function poseBones(
   anims?: AnimBuffers,
   /** Per-bone adjustments from appearance choices (see formats/bone.ts), applied about the bone's pivot. */
   offsets?: ReadonlyMap<number, Float32Array>,
+  /**
+   * Bones that take their rotation from the start of another sequence instead: fingers
+   * closed around a weapon. Only rotation is taken; position and scale stay with the pose,
+   * because the closed-hand sequence does not place the hand.
+   */
+  override?: { sequence: number; bones: ReadonlySet<number> },
 ): Float32Array {
   const sequence = resolveAlias(rig.sequences, sequenceIndex);
   const duration = rig.sequences[sequence]?.duration ?? 0;
@@ -147,7 +153,11 @@ export function poseBones(
     const bone = rig.bones[i]!;
     const hasSequence = rig.sequences[sequence] !== undefined;
     const t = sampleVec3(hasSequence ? keysOf(rig, bone.translation, sequence, time, anims) : undefined, [0, 0, 0]);
-    const q = sampleQuat(hasSequence ? keysOf(rig, bone.rotation, sequence, time, anims) : undefined);
+    const grip =
+      override?.bones.has(i) && rig.sequences[override.sequence]
+        ? keysOf(rig, bone.rotation, resolveAlias(rig.sequences, override.sequence), 0, anims)
+        : undefined;
+    const q = sampleQuat(grip ?? (hasSequence ? keysOf(rig, bone.rotation, sequence, time, anims) : undefined));
     const s = sampleVec3(hasSequence ? keysOf(rig, bone.scale, sequence, time, anims) : undefined, [1, 1, 1]);
     pivotTransform(local, bone.pivot, t, q, s);
     const offset = offsets?.get(i);
@@ -166,4 +176,18 @@ export function poseBones(
   };
   for (let i = 0; i < count; i++) solve(i);
   return matrices;
+}
+
+/** Key-bone IDs of the finger roots: right hand 8..12, left hand 13..17. */
+const FINGERS = { right: [8, 12], left: [13, 17] } as const;
+
+/** The finger bones of a hand: the finger roots and every bone below them. */
+export function fingerBones(bones: Rig['bones'], hand: 'left' | 'right'): Set<number> {
+  const [first, last] = FINGERS[hand];
+  const fingers = new Set<number>();
+  // Parents come before children in the bone list, so one pass reaches every joint.
+  bones.forEach((bone, i) => {
+    if ((bone.keyBoneId >= first && bone.keyBoneId <= last) || fingers.has(bone.parent)) fingers.add(i);
+  });
+  return fingers;
 }

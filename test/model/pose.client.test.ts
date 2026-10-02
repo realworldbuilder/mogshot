@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { CascStorage } from '../../src/casc/storage';
 import { type M2Model, parseM2, VERTEX_SIZE } from '../../src/formats/m2';
 import { parseSkin, type Skin } from '../../src/formats/skin';
-import { findSequence, poseBones } from '../../src/model/pose';
+import { findSequence, fingerBones, poseBones } from '../../src/model/pose';
 import { hasClient, NodeSource, WOW_DIR } from '../node-source';
 
 /** Bounding box of the skin's vertices after posing, as [min, max]. */
@@ -74,5 +74,32 @@ describe.skipIf(!hasClient)('posing the human male', () => {
     const a = posedBounds(model, skin, rest);
     const b = posedBounds(model, skin, stand);
     console.log('rest width', (a.max[1]! - a.min[1]!).toFixed(2), 'stand width', (b.max[1]! - b.min[1]!).toFixed(2));
+  });
+
+  it('closes a hand by turning its fingers only, leaving the hand where it was', () => {
+    const stand = findSequence(model.sequences, 0);
+    const closed = findSequence(model.sequences, 15);
+    expect(closed).toBeGreaterThanOrEqual(0);
+    const fingers = fingerBones(model.bones, 'right');
+    expect(fingers.size).toBeGreaterThanOrEqual(5);
+    expect([...fingerBones(model.bones, 'left')].some((bone) => fingers.has(bone))).toBe(false);
+
+    const open = poseBones(model, stand, 0);
+    const gripping = poseBones(model, stand, 0, undefined, undefined, { sequence: closed, bones: fingers });
+    let turned = 0;
+    model.bones.forEach((_, i) => {
+      const same = open.subarray(i * 16, i * 16 + 16).every((v, k) => Math.abs(v - gripping[i * 16 + k]!) < 1e-5);
+      if (fingers.has(i)) turned += same ? 0 : 1;
+      else expect(same).toBe(true);
+    });
+    expect(turned).toBeGreaterThanOrEqual(5);
+
+    // The bare hand (geoset 401) is still there and still at the end of the arm.
+    const before = posedBounds(model, skin, open, (id) => id === 401);
+    const after = posedBounds(model, skin, gripping, (id) => id === 401);
+    for (let c = 0; c < 3; c++) {
+      expect(Math.abs(after.min[c]! - before.min[c]!)).toBeLessThan(0.15);
+      expect(Math.abs(after.max[c]! - before.max[c]!)).toBeLessThan(0.15);
+    }
   });
 });
