@@ -17,7 +17,7 @@ async function load(page: Page, offline: boolean): Promise<string[]> {
 }
 
 async function expectInstallRead(page: Page, requests: string[], screenshot: string): Promise<void> {
-  await expect(page.locator('#status')).toHaveText('Your game files can be read', { timeout: 60_000 });
+  await expect(page.locator('#folder-status')).toHaveText('Your game files can be read', { timeout: 60_000 });
 
   await expect(page.locator('#build')).toContainText(/\d+\.\d+\.\d+\.\d+/);
   const files = await page.locator('#files').innerText();
@@ -52,6 +52,18 @@ test('reads the game database with definitions from GitHub', async ({ page }) =>
   await expectInstallRead(page, requests, 'online');
   await expect(page.locator('#tables')).toContainText(/Read \d+ races and [\d,]+ items/);
   expect(requests.some((url) => url.startsWith(DEFINITIONS))).toBe(true);
+});
+
+test('draws the human male', async ({ page }) => {
+  await load(page, false);
+  await page.locator('#folder').setInputFiles(WOW_DIR);
+  await expect(page.locator('#character')).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('#character-note')).toContainText('Built in');
+  // Kept for looking at by eye; test-results/ is not committed.
+  await page.locator('#canvas').screenshot({ path: 'test-results/human-male.png' });
+  // The only thing reported as not right is the one known gap.
+  const problems = await page.locator('#character-problems li').allInnerTexts();
+  expect(problems.filter((p) => !p.startsWith('Face shape: bone sets'))).toEqual([]);
 });
 
 test('reads a folder dropped on the page, network off', async ({ page }) => {

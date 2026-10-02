@@ -124,3 +124,23 @@ footer {
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
+
+.stage {
+  display: flex;
+  justify-content: center;
+  margin: 0 0 12px;
+  border-radius: 8px;
+  /* Checkerboard: shows through wherever the picture is transparent. */
+  background: repeating-conic-gradient(#3a3f48 0% 25%, #2b2f37 0% 50%) 0 0 / 24px 24px;
+}
+
+.stage canvas {
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+}
+
+ul {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}

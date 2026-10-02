@@ -3,7 +3,8 @@ import { describeFile, formatBytes } from './app/describe';
 import { InstallError, type OpenStage } from './casc/storage';
 import { filesFromDroppedFolder } from './io/dropped-folder';
 import { type PickedFile, pickedFiles } from './io/file-list-source';
-import type { OpenResult, ProbeResult, TableSummary } from './worker/api';
+import { CharacterRenderer } from './render/renderer';
+import type { CharacterResult, OpenResult, ProbeResult, TableSummary } from './worker/api';
 import { DataClient, DataError } from './worker/client';
 
 /** Files read to prove the local archives work: a database table, a model and a texture. */
@@ -21,6 +22,10 @@ const STAGE_TEXT: Record<OpenStage, string> = {
   join: 'Matching file IDs to archives…',
 };
 
+/** The one character this build draws. */
+const HUMAN = 1;
+const MALE = 0;
+
 // Mogshot is developed and tested in Chrome. Other browsers get the page with a warning.
 const chromium = 'chrome' in window;
 
@@ -30,10 +35,10 @@ app.innerHTML = `
   <p class="dim">Transparent PNG cutouts of World of Warcraft characters, made from your own game files in your browser.</p>
 
   <section class="panel">
-    <h2>Early build: folder check only</h2>
-    <p>There is nothing to export yet. This page checks that Mogshot can read your game files.
-    They are read on your computer and are never uploaded. The only thing downloaded is the
-    community's description of the game's database tables, from GitHub.</p>
+    <h2>Early build: one character</h2>
+    <p>Give Mogshot your World of Warcraft folder and it draws a human male from your game files.
+    There is nothing to choose or export yet. The files are read on your computer and are never uploaded;
+    the only thing downloaded is the community's description of the game's database tables, from GitHub.</p>
     ${chromium ? '' : '<p class="bad">Mogshot is only tested in Chrome. It may not work in this browser.</p>'}
     <div id="drop">
       <p><strong>Drag your World of Warcraft folder onto this page</strong></p>
@@ -45,6 +50,15 @@ app.innerHTML = `
     wording for letting a page read a folder. Nothing leaves your computer. Not tested on Windows yet.</p>
   </section>
 
+  <p class="dim" id="status" hidden></p>
+
+  <section class="panel" id="character" hidden>
+    <h2>Human male</h2>
+    <div class="stage"><canvas id="canvas" width="960" height="1280"></canvas></div>
+    <p class="dim small" id="character-note"></p>
+    <div id="character-problems"></div>
+  </section>
+
   <section class="panel" id="result" hidden></section>
 
   <footer class="dim small">
@@ -54,20 +68,53 @@ app.innerHTML = `
   </footer>
 `;
 
+const status = document.querySelector<HTMLElement>('#status')!;
 const result = document.querySelector<HTMLElement>('#result')!;
+const character = document.querySelector<HTMLElement>('#character')!;
+const characterNote = document.querySelector<HTMLElement>('#character-note')!;
+const characterProblems = document.querySelector<HTMLElement>('#character-problems')!;
+const canvas = document.querySelector<HTMLCanvasElement>('#canvas')!;
 const drop = document.querySelector<HTMLElement>('#drop')!;
 const folder = document.querySelector<HTMLInputElement>('#folder')!;
 
 // Started on page load so the worker script is already in memory when the folder arrives.
 const data = new DataClient();
+let renderer: CharacterRenderer | undefined;
 let busy = false;
 
 const escapeHtml = (text: string) =>
   text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 function showStatus(text: string, bad = false): void {
-  result.hidden = false;
-  result.innerHTML = `<p class="${bad ? 'bad' : 'dim'}" id="status">${escapeHtml(text)}</p>`;
+  status.hidden = text === '';
+  status.textContent = text;
+  status.className = bad ? 'bad' : 'dim';
+}
+
+function showCharacter(built: CharacterResult): void {
+  renderer ??= new CharacterRenderer(canvas);
+  renderer.setScene(built.scene);
+  renderer.render();
+  const problems = [...built.scene.problems, ...renderer.problems];
+  character.hidden = false;
+  characterNote.textContent =
+    `First choice of every appearance option, standing. Built in ${(built.ms / 1000).toFixed(1)} s. ` +
+    'The grey squares are transparency.';
+  characterProblems.innerHTML =
+    problems.length === 0
+      ? ''
+      : `<p class="bad small">Not right yet:</p><ul class="small">${problems
+          .map((problem) => `<li>${escapeHtml(problem)}</li>`)
+          .join('')}</ul>`;
+}
+
+function showCharacterError(error: unknown): void {
+  character.hidden = false;
+  canvas.parentElement!.hidden = true;
+  characterNote.textContent = '';
+  characterProblems.innerHTML = `<p class="bad">The character could not be drawn: ${escapeHtml(messageOf(error))}</p>`;
 }
 
 function probeRow(label: string, fileId: number, probe: ProbeResult): string {
@@ -123,7 +170,7 @@ function showResult(opened: OpenResult, probes: ProbeResult[], tables: TablesChe
 
   result.hidden = false;
   result.innerHTML = `
-    <h2 id="status">Your game files can be read</h2>
+    <h2 id="folder-status">Your game files can be read</h2>
     <dl>
       <dt>Product</dt><dd>${productRow}</dd>
       <dt>Build</dt><dd id="build">${escapeHtml(info.version)} <span class="dim">(${escapeHtml(info.buildName)}, ${escapeHtml(info.locale)})</span></dd>
@@ -140,27 +187,38 @@ function showResult(opened: OpenResult, probes: ProbeResult[], tables: TablesChe
 }
 
 function showError(error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error);
   const install = error instanceof InstallError || (error instanceof DataError && error.install);
-  showStatus(install ? message : `Something went wrong reading the folder: ${message}`, true);
+  showStatus(install ? messageOf(error) : `Something went wrong reading the folder: ${messageOf(error)}`, true);
 }
 
 async function openFolder(files: PickedFile[], product?: string): Promise<void> {
   if (busy) return;
   busy = true;
+  character.hidden = true;
+  result.hidden = true;
+  canvas.parentElement!.hidden = false;
   try {
     showStatus(STAGE_TEXT.config);
     const opened = await data.open(files, product, (stage) => showStatus(STAGE_TEXT[stage]));
+
+    showStatus('Building the character…');
+    try {
+      showCharacter(await data.character(HUMAN, MALE));
+    } catch (error) {
+      showCharacterError(error);
+    }
+
+    showStatus('Checking the folder…');
     const probes: ProbeResult[] = [];
     for (const probe of PROBES) probes.push(await data.probe(probe.fileId));
-    showStatus('Reading the game database…');
     let tables: TablesCheck;
     try {
       tables = { races: await data.tableSummary('ChrRaces'), items: await data.tableSummary('ItemSparse') };
     } catch (error) {
-      tables = { error: error instanceof Error ? error.message : String(error) };
+      tables = { error: messageOf(error) };
     }
     showResult(opened, probes, tables, files);
+    showStatus('');
   } catch (error) {
     showError(error);
   } finally {

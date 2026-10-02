@@ -1,6 +1,6 @@
 import type { OpenStage } from '../casc/storage';
 import type { PickedFile } from '../io/file-list-source';
-import type { OpenResult, ProbeResult, Request, Response, TableSummary } from './api';
+import type { CharacterResult, OpenResult, ProbeResult, Request, Response, TableSummary } from './api';
 
 /** An error the worker raised. `install` means the folder itself is the problem. */
 export class DataError extends Error {
@@ -49,6 +49,10 @@ export class DataClient {
 
   probe(fileId: number): Promise<ProbeResult> {
     return this.call({ method: 'probe', fileId });
+  }
+
+  character(raceId: number, sex: number): Promise<CharacterResult> {
+    return this.call({ method: 'character', raceId, sex });
   }
 
   tableSummary(table: string): Promise<TableSummary> {

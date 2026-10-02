@@ -1,12 +1,16 @@
 /// <reference lib="webworker" />
 import { CascStorage, InstallError, listProducts } from '../casc/storage';
+import { Appearance } from '../character/appearance';
+import { buildCharacterScene } from '../character/scene';
 import { Database } from '../db2/database';
 import { Definitions } from '../db2/definitions';
 import { FileListSource } from '../io/file-list-source';
-import type { OpenResult, ProbeResult, Request, Response, TableSummary } from './api';
+import type { CharacterResult, OpenResult, ProbeResult, Request, Response, TableSummary } from './api';
 
 let storage: CascStorage | undefined;
 let database: Database | undefined;
+// Loaded from the database the first time a character is asked for.
+let appearance: Promise<Appearance> | undefined;
 
 const definitions = new Definitions(async (url) => {
   const response = await fetch(url);
@@ -28,6 +32,7 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
         onProgress: (stage) => post({ id: request.id, type: 'progress', stage }),
       });
       database = new Database(storage, definitions);
+      appearance = undefined;
       const value: OpenResult = {
         info: storage.info,
         stats: storage.files.stats,
@@ -52,6 +57,24 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
         ms: performance.now() - start,
       };
       return { value, transfer: [head.buffer] };
+    }
+    case 'character': {
+      if (!storage || !database) throw new Error('No folder is open');
+      const start = performance.now();
+      appearance ??= Appearance.load(database);
+      let loaded: Appearance;
+      try {
+        loaded = await appearance;
+      } catch (error) {
+        appearance = undefined; // let the next request try again
+        throw error;
+      }
+      const scene = await buildCharacterScene(storage, loaded, { raceId: request.raceId, sex: request.sex });
+      const value: CharacterResult = { scene, ms: performance.now() - start };
+      const transfer = [scene.vertices.buffer, scene.indices.buffer, scene.bones.buffer];
+      // A texture can be used by more than one slot; each buffer may be transferred once.
+      for (const buffer of new Set(scene.textures.map((texture) => texture.pixels.buffer))) transfer.push(buffer);
+      return { value, transfer };
     }
     case 'tableSummary': {
       if (!database) throw new Error('No folder is open');

@@ -1,6 +1,7 @@
 import type { BuildInfoEntry } from '../casc/build-info';
 import type { FileIndexStats } from '../casc/file-index';
 import type { OpenStage, StorageInfo } from '../casc/storage';
+import type { CharacterScene } from '../character/scene';
 import type { PickedFile } from '../io/file-list-source';
 
 export interface OpenResult {
@@ -33,7 +34,13 @@ export interface TableSummary {
 export type Request =
   | { id: number; method: 'open'; files: PickedFile[]; product?: string }
   | { id: number; method: 'probe'; fileId: number }
-  | { id: number; method: 'tableSummary'; table: string };
+  | { id: number; method: 'tableSummary'; table: string }
+  | { id: number; method: 'character'; raceId: number; sex: number };
+
+export interface CharacterResult {
+  scene: CharacterScene;
+  ms: number;
+}
 
 export type Response =
   | { id: number; type: 'progress'; stage: OpenStage }

@@ -10,6 +10,8 @@ export default defineConfig({
     // The installed Google Chrome: it is the browser the product targets.
     channel: 'chrome',
     baseURL: deployed ?? 'http://localhost:4173/mogshot/',
+    // Screenshots at 2x, so the character canvas is captured at its full pixel size.
+    deviceScaleFactor: 2,
   },
   webServer: deployed
     ? undefined
