@@ -148,9 +148,72 @@ footer {
 }
 
 .stage canvas {
-  width: 100%;
-  max-width: 480px;
+  display: block;
+  max-width: 100%;
+  max-height: 640px;
+  width: auto;
   height: auto;
+  cursor: grab;
+  touch-action: none;
+}
+
+.stage canvas:active {
+  cursor: grabbing;
+}
+
+.hint {
+  margin: -4px 0 12px;
+}
+
+.pose {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.presets button,
+button.plain {
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 0.875rem;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.presets button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.plain:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.scrub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.scrub select {
+  width: 190px;
+}
+
+.scrub input[type='range'] {
+  flex: 1;
+  min-width: 80px;
+  accent-color: var(--accent);
 }
 
 ul {
