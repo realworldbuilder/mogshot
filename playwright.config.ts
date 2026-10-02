@@ -6,6 +6,8 @@ const deployed = process.env.MOGSHOT_URL;
 export default defineConfig({
   testDir: 'e2e',
   timeout: 120_000,
+  // The checks read gigabytes from the same install; running them one at a time keeps timings honest.
+  workers: 1,
   use: {
     // The installed Google Chrome: it is the browser the product targets.
     channel: 'chrome',

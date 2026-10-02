@@ -418,3 +418,47 @@ test('exports a glowing weapon with its glow as transparency', async ({ page }) 
   writePng('test-results/export-glow-white.png', over(small, [255, 255, 255]));
   writePng('test-results/export-glow-magenta.png', over(small, [255, 0, 255]));
 });
+
+test('remembers the character and opens quickly on a return visit, even offline', async ({ page }) => {
+  test.setTimeout(180_000);
+  await load(page, false);
+  await openAndDraw(page);
+  const firstIndexing = Number((await page.locator('#indexed').innerText()).match(/[\d.]+/)![0]);
+  await redraw(page, () => page.locator('#race').selectOption({ label: 'Orc' }));
+  await repose(page, () => page.locator('#presets button', { hasText: /^Cheer$/ }).click());
+  await equip(page, 'head', 'Lionheart Helm');
+  await page.locator('#size').selectOption('square');
+  // Colour options are swatches; picking one changes the picture.
+  const skin = page.locator('.swatches[data-option="Skin Color"] button');
+  expect(await skin.count()).toBeGreaterThan(3);
+  const before = await page.locator('#canvas').screenshot();
+  await redraw(page, () => skin.nth(3).click());
+  expect((await page.locator('#canvas').screenshot()).equals(before)).toBe(false);
+  await expect(skin.nth(3)).toHaveAttribute('aria-checked', 'true');
+
+  // Back later, with no network: the index and the table definitions come from the cache.
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.context().setOffline(true);
+  await openAndDraw(page);
+  await expect(page.locator('#indexed')).toContainText('from an earlier visit');
+  const secondIndexing = Number((await page.locator('#indexed').innerText()).match(/[\d.]+/)![0]);
+  console.log(`indexed in ${firstIndexing} s, then ${secondIndexing} s from the cache`);
+  expect(secondIndexing).toBeLessThan(Math.max(0.3, firstIndexing / 3));
+  await expect(page.locator('#race option:checked')).toHaveText('Orc');
+  await expect(page.locator('#presets button.on')).toHaveText('Cheer');
+  await expect(page.locator('[data-slot="head"] .item-name')).toHaveText('Lionheart Helm');
+  await expect(page.locator('#size option:checked')).toContainText('Square');
+  await expect(skin.nth(3)).toHaveAttribute('aria-checked', 'true');
+  expect(await problemsShown(page)).toEqual([]);
+  await page.context().setOffline(false);
+});
+
+test('offers to try again when the table definitions could not be fetched', async ({ page }) => {
+  await load(page, true);
+  await page.locator('#folder').setInputFiles(WOW_DIR);
+  await expect(page.locator('#character-error')).toContainText('could not be drawn');
+  await page.context().setOffline(false);
+  await page.locator('#retry').click();
+  await expect(page.locator('#character-note')).toContainText('Built in', { timeout: 60_000 });
+  await expect(page.locator('#character-error')).toHaveCount(0);
+});
