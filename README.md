@@ -6,18 +6,30 @@ Site: https://realworldbuilder.github.io/mogshot/
 
 ## Status
 
-Not usable yet. Today the site is a placeholder page. This section is updated as things actually work; it lists nothing that doesn't.
+Not usable for making images yet. This section is updated as things actually work; it lists nothing that doesn't.
+
+What works today, in Chrome on a Mac, against WoW build 1.60.1.70170 (`wow_classic_beta`):
+
+- Pick your World of Warcraft folder. The page names the product and build, counts how many of the build's files are on disk, says whether high-res textures are installed, and reads a database table, a model and a texture from the local archives.
+- Nothing is fetched from the network after the folder is picked.
+
+Not yet tested: Edge, Windows, and any other WoW product. On Windows, Chrome's folder picker refuses folders inside `Program Files`; the page has a second picker for that case.
 
 ## Development
 
 ```bash
 pnpm install
 pnpm dev      # local dev server
-pnpm test     # unit tests
+pnpm test     # unit tests, plus tests against a game install
+pnpm e2e      # the built page in Google Chrome, network off, against a game install
 pnpm build    # type-check and build to dist/
 ```
 
 Tests that need a game install look for it at `WOW_DIR` (default `/Applications/World of Warcraft`) and report as skipped when it is absent.
+
+## Credits
+
+The CASC, BLTE and root-file reading follows [wow.export](https://github.com/Kruithne/wow.export) (MIT, Kruithne and Marlamin) and [wowdev.wiki](https://wowdev.wiki).
 
 ## Licence
 
