@@ -14,3 +14,8 @@ Ideas that are not the one job (folder → character → pose → transparent PN
 - Import a real character from the armory or an addon
 - User accounts
 - Safari and Firefox support
+- Particle and ribbon effects on items
+- Guild tabard emblems
+- Reading models whose skeleton is in a separate `.skel` file (retail's newer races)
+- Decrypting data whose keys are public (other WoW products)
+- Remembering the folder for folders outside /Applications and Program Files, where Chrome's picker is allowed
