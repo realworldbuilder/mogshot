@@ -13,17 +13,20 @@ What works today, in Chrome on a Mac, against WoW build 1.60.1.70170 (`wow_class
 - Drag your World of Warcraft folder onto the page, or choose it with the button.
 - Pick a race and sex from the ones the game lets you create (ten races in this build), and set each appearance option the character creation screen offers. The character is drawn from the game's own data in the Stand pose on a transparent background: skin, face, hair, facial hair, eyes, underwear, face shapes, and the jewellery and other pieces some races add.
 - Download PNG saves the picture as a transparent PNG, 3840 pixels on its longer side, supersampled, with straight (not premultiplied) alpha. It can be cropped tightly to the character. On the development machine this takes under a second.
-- If something a character needs cannot be read, the page lists it beside the picture.
+- Dress the character: each of the thirteen visible slots (head, shoulders, back, chest, shirt, tabard, wrists, hands, waist, legs, feet, main hand, off hand) has a search by name with the items' icons. Armour is painted and shaped on the body, helms, shoulders, weapons and shields are attached, a held weapon closes the hand, and glows face the camera. Gear stays on when you change race or sex.
+- If something a character or an item needs cannot be read, the page lists it by name under the download button, before you download.
 - The page shows the product and build it found, how many of the build's files are on disk, and whether high-res textures are installed.
-- The 35 database tables the character and gear pipeline needs match wago.tools' export of the same build cell for cell. Sections encrypted with unpublished keys are skipped and counted (69 of 19,293 items in this build).
+- The 36 database tables the character and gear pipeline needs match wago.tools' export of the same build cell for cell. Sections encrypted with unpublished keys are skipped and counted (69 of 19,293 items in this build).
 - The only thing fetched from the network after the folder is given is the table definitions, from wowdev/WoWDBDefs on GitHub.
 
 Known to be wrong or missing:
 
-- Nothing has been compared with the game side by side yet: lighting, skin tones and face shapes are unverified.
+- Nothing has been compared with the game side by side yet: lighting, skin tones, face shapes and how gear sits are unverified.
 - Colour options (skin, hair, eyes) are listed as numbers, not swatches.
 - Glowing (additive) parts get their transparency from their brightness. That is exact over black and an approximation over anything else.
-- No gear, no pose or camera choice, no size presets.
+- Particle and ribbon effects on items (trails, sparks, enchant glows) are not drawn.
+- Weapons are held in the hand in the Stand pose, which points them forward; there is no pose or camera choice yet, and no size presets.
+- Guild tabards have no emblem. Items that share a name and a look are listed once.
 - Models that keep their skeleton in a separate file cannot be read. No race this build lets you create uses one; other WoW products do.
 
 Not yet tested: Edge, Windows, other browsers, and any other WoW product. Encrypted data with published keys is not decrypted yet (this build has none).
