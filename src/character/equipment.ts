@@ -49,6 +49,8 @@ export interface ItemSummary {
   iconFileId: number;
 }
 
+export type WeaponKind = 'oneHand' | 'twoHand' | 'long' | 'bow' | 'rifle' | 'crossbow' | 'thrown';
+
 export interface ItemModel {
   fileId: number;
   /** 0 for the item's first model, 1 for its second (a pair of shoulders has two). */
@@ -73,6 +75,8 @@ export interface ItemLook {
   characterTextures: Map<number, number>;
   /** A bow: held in the left hand although it is a main-hand item. */
   bow: boolean;
+  /** How a weapon is wielded, which decides the ready and attack animations. Undefined for armour. */
+  weapon: WeaponKind | undefined;
   /** A shield: strapped to the forearm, not held. */
   shield: boolean;
 }
@@ -101,8 +105,11 @@ const n = (value: unknown): number => Number(value ?? 0);
 const anyGender = (gender: number) => gender === 2 || gender === 3;
 
 const INVENTORY_SHIELD = 14;
+const INVENTORY_TWO_HAND = 17;
 const CLASS_WEAPON = 2;
 const SUBCLASS_BOW = 2;
+/** Weapon subclasses with their own way of being held; anything else is by one or two hands. */
+const WEAPON_KINDS: Record<number, WeaponKind> = { 2: 'bow', 3: 'rifle', 6: 'long', 10: 'long', 16: 'thrown', 18: 'crossbow' };
 
 export class Equipment {
   private readonly bySlot = new Map<Slot, ItemSummary[]>();
@@ -393,6 +400,10 @@ export class Equipment {
       models,
       characterTextures: models.length === 0 ? texturesFor(0) : new Map(),
       bow: kind?.classId === CLASS_WEAPON && kind.subclassId === SUBCLASS_BOW,
+      weapon:
+        kind?.classId === CLASS_WEAPON
+          ? (WEAPON_KINDS[kind.subclassId] ?? (item.inventoryType === INVENTORY_TWO_HAND ? 'twoHand' : 'oneHand'))
+          : undefined,
       shield: item.inventoryType === INVENTORY_SHIELD,
     };
   }
