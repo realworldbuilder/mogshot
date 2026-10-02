@@ -2,7 +2,7 @@
 import { CascStorage, InstallError, listProducts } from '../casc/storage';
 import { Appearance } from '../character/appearance';
 import { Equipment } from '../character/equipment';
-import { buildCharacterScene } from '../character/scene';
+import { buildCharacterScene, type CharacterRig } from '../character/scene';
 import { Database } from '../db2/database';
 import { Definitions } from '../db2/definitions';
 import { decodeBlp } from '../formats/blp';
@@ -13,6 +13,8 @@ let storage: CascStorage | undefined;
 let database: Database | undefined;
 let appearance: Promise<Appearance> | undefined;
 let equipment: Promise<Equipment> | undefined;
+// The character last built, kept so it can be posed again without rebuilding.
+let rig: CharacterRig | undefined;
 
 const definitions = new Definitions(async (url) => {
   const response = await fetch(url);
@@ -60,6 +62,7 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       database = new Database(storage, definitions);
       appearance = undefined;
       equipment = undefined;
+      rig = undefined;
       const value: OpenResult = {
         info: storage.info,
         stats: storage.files.stats,
@@ -75,19 +78,28 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       const start = performance.now();
       // The item tables are only read once something is worn.
       const items = request.gear.length > 0 ? await loadEquipment() : undefined;
-      const scene = await buildCharacterScene(storage, await loadAppearance(), items, {
+      const built = await buildCharacterScene(storage, await loadAppearance(), items, {
         raceId: request.raceId,
         sex: request.sex,
         choices: new Map(request.choices),
         gear: new Map(request.gear),
+        pose: request.pose,
       });
+      rig = built.rig;
+      const { scene } = built;
       const value: CharacterResult = { scene, ms: performance.now() - start };
       // A buffer may be transferred once, and the same pixels can back more than one texture.
       const buffers = new Set<ArrayBufferLike>(scene.textures.map((texture) => texture.pixels.buffer));
       for (const mesh of scene.meshes) {
-        buffers.add(mesh.vertices.buffer).add(mesh.indices.buffer).add(mesh.bones.buffer).add(mesh.transform.buffer);
+        // The vertices are copied, not moved: the rig keeps them to measure each new pose.
+        buffers.add(mesh.indices.buffer).add(mesh.bones.buffer).add(mesh.transform.buffer);
       }
       return { value, transfer: [...buffers] as Transferable[] };
+    }
+    case 'pose': {
+      if (!rig) throw new Error('No character has been built');
+      const value = await rig.pose(request.sequence, request.time);
+      return { value, transfer: value.meshes.flatMap((mesh) => [mesh.bones.buffer, mesh.transform.buffer]) as Transferable[] };
     }
     case 'searchItems': {
       const value: ItemSearchResult = (await loadEquipment()).search(request.slot, request.query);
