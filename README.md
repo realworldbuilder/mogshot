@@ -10,9 +10,17 @@ Not usable for making images yet. This section is updated as things actually wor
 
 What works today, in Chrome on a Mac, against WoW build 1.60.1.70170 (`wow_classic_beta`):
 
-- Drag your World of Warcraft folder onto the page, or choose it with the button. The page names the product and build, counts how many of the build's files are on disk, says whether high-res textures are installed, and reads a database table, a model and a texture from the local archives.
-- It decodes the game's database tables. The 33 tables the character and gear pipeline needs match wago.tools' export of the same build cell for cell. Sections encrypted with unpublished keys are skipped and counted (69 of 19,293 items in this build).
+- Drag your World of Warcraft folder onto the page, or choose it with the button.
+- The page draws one character from your game files: a human male with the first choice of every appearance option, in the Stand pose, on a transparent background. Skin, face, eyebrows, underwear, beard and eyes are composited and textured from the game's own data.
+- Below it, the page names the product and build, counts how many of the build's files are on disk, says whether high-res textures are installed, and reads a table, a model and a texture as a check.
+- The 34 database tables the character and gear pipeline needs match wago.tools' export of the same build cell for cell. Sections encrypted with unpublished keys are skipped and counted (69 of 19,293 items in this build).
 - The only thing fetched from the network after the folder is given is the table definitions, from wowdev/WoWDBDefs on GitHub.
+
+Known to be wrong or missing:
+
+- Face options reshape the face with bone sets; those are not applied, so every face has the base shape. The page says so under the picture.
+- The lighting has not been compared with the game yet.
+- No other race or sex, no appearance choices, no gear, no pose choice, no export.
 
 Not yet tested: Edge, Windows, other browsers, and any other WoW product. Encrypted data with published keys is not decrypted yet (this build has none).
 
@@ -32,7 +40,7 @@ Tests that need a game install look for it at `WOW_DIR` (default `/Applications/
 
 ## Credits
 
-The CASC, BLTE, root-file and database-table reading follows [wow.export](https://github.com/Kruithne/wow.export) (MIT, Kruithne and Marlamin) and [wowdev.wiki](https://wowdev.wiki). Table definitions come from [WoWDBDefs](https://github.com/wowdev/WoWDBDefs) at run time.
+The file reading (CASC, BLTE, root, database tables, models, skins, textures), the shader combiner table and the appearance data relationships follow [wow.export](https://github.com/Kruithne/wow.export) (MIT, Kruithne and Marlamin) and [wowdev.wiki](https://wowdev.wiki). Table definitions come from [WoWDBDefs](https://github.com/wowdev/WoWDBDefs) at run time.
 
 ## Licence
 
