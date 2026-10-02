@@ -44,6 +44,7 @@ const TABLES = [
   'ModelFileData',
   'ComponentModelFileData',
   'HelmetGeosetData',
+  'ItemSet',
   'AnimationData',
 ];
 

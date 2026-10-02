@@ -51,6 +51,20 @@ export interface ItemSummary {
 
 export type WeaponKind = 'oneHand' | 'twoHand' | 'long' | 'bow' | 'rifle' | 'crossbow' | 'thrown';
 
+export interface ClassInfo {
+  id: number;
+  name: string;
+}
+
+/** A set of matching items (a raid tier, a dungeon set), with its pieces placed in slots. */
+export interface ItemSetInfo {
+  id: number;
+  name: string;
+  /** The highest item level among the pieces: a rough rank of how late in the game the set is. */
+  level: number;
+  pieces: [Slot, ItemSummary][];
+}
+
 export interface ItemModel {
   fileId: number;
   /** 0 for the item's first model, 1 for its second (a pair of shoulders has two). */
@@ -111,12 +125,28 @@ const SUBCLASS_BOW = 2;
 /** Weapon subclasses with their own way of being held; anything else is by one or two hands. */
 const WEAPON_KINDS: Record<number, WeaponKind> = { 2: 'bow', 3: 'rifle', 6: 'long', 10: 'long', 16: 'thrown', 18: 'crossbow' };
 
+/** Which slot an item of an inventory type goes in. Weapons that fit either hand take the main hand first. */
+function slotFor(inventoryType: number, taken: ReadonlySet<Slot>): Slot | undefined {
+  const fits = SLOTS.filter((slot) => slot.inventoryTypes.includes(inventoryType)).map((slot) => slot.id);
+  return fits.find((slot) => !taken.has(slot)) ?? fits[0];
+}
+
+const TWO_HANDED_TYPES = new Set([17, 15, 26, 25]);
+
+const CLASS_ARMOUR = 4;
+/** The armour each class wears at level 60 (Item subclass: 1 cloth, 2 leather, 3 mail, 4 plate). */
+const ARMOUR_OF_CLASS: Record<number, number> = { 1: 4, 2: 4, 3: 3, 4: 2, 5: 1, 7: 3, 8: 1, 9: 1, 11: 2 };
+
 export class Equipment {
   private readonly bySlot = new Map<Slot, ItemSummary[]>();
   private readonly items = new Map<number, ItemSummary>();
 
   private constructor(
     summaries: ItemSummary[],
+    private readonly itemFacts: Map<number, { allowableClass: number; level: number }>,
+    private readonly setRows: { id: number; name: string; itemIds: number[] }[],
+    private readonly classNames: Map<number, string>,
+    private readonly classesByRace: Map<number, number[]>,
     private readonly itemClass: Map<number, { classId: number; subclassId: number }>,
     private readonly displayOfItem: Map<number, number>,
     private readonly displays: Map<number, Display>,
@@ -143,9 +173,9 @@ export class Equipment {
   static async load(database: Database): Promise<Equipment> {
     const [
       sparse, item, modified, appearance, display, materialRes, modelMatRes, modelFileData,
-      componentModels, textureFileData, componentTextures, helmetData, races,
+      componentModels, textureFileData, componentTextures, helmetData, races, itemSets, classes, baseInfo,
     ] = await Promise.all([
-      database.table('ItemSparse', ['Display_lang', 'InventoryType', 'OverallQualityID']),
+      database.table('ItemSparse', ['Display_lang', 'InventoryType', 'OverallQualityID', 'AllowableClass', 'ItemLevel']),
       database.table('Item', ['IconFileDataID', 'ClassID', 'SubclassID']),
       database.table('ItemModifiedAppearance', ['ItemID', 'ItemAppearanceModifierID', 'ItemAppearanceID']),
       database.table('ItemAppearance', ['ItemDisplayInfoID', 'DefaultIconFileDataID']),
@@ -163,6 +193,9 @@ export class Equipment {
         'MaleModelFallbackRaceID', 'MaleModelFallbackSex', 'FemaleModelFallbackRaceID', 'FemaleModelFallbackSex',
         'MaleTextureFallbackRaceID', 'MaleTextureFallbackSex', 'FemaleTextureFallbackRaceID', 'FemaleTextureFallbackSex',
       ]),
+      database.table('ItemSet', ['Name_lang', 'ItemID']),
+      database.table('ChrClasses', ['Name_lang']),
+      database.table('CharBaseInfo', ['RaceID', 'ClassID']),
     ]);
 
     const multi = (rows: Row[], key: string, value: string): Map<number, number[]> => {
@@ -260,8 +293,19 @@ export class Equipment {
         ]),
       );
 
+    const classesByRace = new Map<number, number[]>();
+    for (const row of baseInfo.rows) {
+      let list = classesByRace.get(n(row.RaceID));
+      if (!list) classesByRace.set(n(row.RaceID), (list = []));
+      if (!list.includes(n(row.ClassID))) list.push(n(row.ClassID));
+    }
+
     return new Equipment(
       summaries,
+      new Map(sparse.rows.map((row) => [n(row.ID), { allowableClass: n(row.AllowableClass), level: n(row.ItemLevel) }])),
+      itemSets.rows.map((row) => ({ id: n(row.ID), name: String(row.Name_lang), itemIds: (row.ItemID as number[]).filter(Boolean) })),
+      new Map(classes.rows.map((row) => [n(row.ID), String(row.Name_lang)])),
+      classesByRace,
       new Map(item.rows.map((row) => [n(row.ID), { classId: n(row.ClassID), subclassId: n(row.SubclassID) }])),
       displayOfItem,
       new Map(
@@ -289,6 +333,73 @@ export class Equipment {
 
   item(id: number): ItemSummary | undefined {
     return this.items.get(id);
+  }
+
+  /** The classes a race can be, in name order. */
+  classes(raceId: number): ClassInfo[] {
+    return (this.classesByRace.get(raceId) ?? [])
+      .map((id) => ({ id, name: this.classNames.get(id) ?? `Class ${id}` }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Sets a class can wear, best first. A set counts when at least five of its pieces are in
+   * the game data. It is for the class if every piece allows that class and the armour is
+   * the kind the class wears (set pieces often allow every class in the data).
+   */
+  sets(classId: number): ItemSetInfo[] {
+    const bit = 1 << (classId - 1);
+    const armour = ARMOUR_OF_CLASS[classId];
+    const result: ItemSetInfo[] = [];
+    for (const row of this.setRows) {
+      const present = row.itemIds.map((id) => this.items.get(id)).filter((item): item is ItemSummary => item !== undefined);
+      if (present.length < 5) continue;
+      let allowed = -1;
+      let level = 0;
+      for (const id of row.itemIds) {
+        const facts = this.itemFacts.get(id);
+        if (!facts) continue;
+        // 0 and -1 both mean any class.
+        if (facts.allowableClass > 0) allowed &= facts.allowableClass;
+        level = Math.max(level, facts.level);
+      }
+      if ((allowed & bit) === 0) continue;
+      const kinds = present.map((item) => this.itemClass.get(item.id)).filter((kind) => kind?.classId === CLASS_ARMOUR);
+      if (armour !== undefined && kinds.length > 0 && !kinds.some((kind) => kind!.subclassId === armour)) continue;
+      const taken = new Set<Slot>();
+      const pieces: [Slot, ItemSummary][] = [];
+      for (const item of present) {
+        const slot = slotFor(item.inventoryType, taken);
+        if (!slot || taken.has(slot)) continue;
+        taken.add(slot);
+        pieces.push([slot, item]);
+      }
+      result.push({ id: row.id, name: row.name, level, pieces });
+    }
+    return result.sort((a, b) => b.level - a.level || a.name.localeCompare(b.name));
+  }
+
+  /**
+   * A random item of at least the given quality in every armour slot and the hands. A
+   * two-handed weapon leaves the off hand empty.
+   */
+  randomOutfit(minQuality: number, random = Math.random): [Slot, ItemSummary][] {
+    const pick = (slot: Slot, keep: (item: ItemSummary) => boolean = () => true) => {
+      const pool = (this.bySlot.get(slot) ?? []).filter((item) => item.quality >= minQuality && keep(item));
+      return pool[Math.floor(random() * pool.length)];
+    };
+    const outfit: [Slot, ItemSummary][] = [];
+    for (const slot of ['head', 'shoulder', 'back', 'chest', 'wrist', 'hands', 'waist', 'legs', 'feet'] as const) {
+      const item = pick(slot);
+      if (item) outfit.push([slot, item]);
+    }
+    const main = pick('mainHand');
+    if (main) outfit.push(['mainHand', main]);
+    if (!main || !TWO_HANDED_TYPES.has(main.inventoryType)) {
+      const off = pick('offHand');
+      if (off) outfit.push(['offHand', off]);
+    }
+    return outfit;
   }
 
   /**

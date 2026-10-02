@@ -165,4 +165,32 @@ describe.skipIf(!hasClient)('gear', () => {
     expect(reported.filter((line) => line.includes('untextured geosets'))).toEqual([]);
     expect(reported.length).toBeLessThan(built * 0.02);
   }, 300_000);
+
+  it('lists the sets a class can wear, best first, with pieces in slots', () => {
+    const classes = equipment.classes(1);
+    expect(classes.map((c) => c.name)).toContain('Warrior');
+    const warrior = classes.find((c) => c.name === 'Warrior')!;
+    const sets = equipment.sets(warrior.id);
+    expect(sets.length).toBeGreaterThan(3);
+    expect(sets[0]!.level).toBeGreaterThanOrEqual(sets[1]!.level);
+    const dreadnaught = sets.find((s) => s.name === "Dreadnaught's Battlegear")!;
+    expect(dreadnaught.pieces.map(([slot]) => slot).sort()).toEqual(
+      ['chest', 'feet', 'hands', 'head', 'legs', 'shoulder', 'waist', 'wrist'].sort(),
+    );
+    // A mage set is not offered to a warrior.
+    expect(sets.some((s) => s.name === 'Frostfire Regalia')).toBe(false);
+    const mage = equipment.classes(1).find((c) => c.name === 'Mage')!;
+    expect(equipment.sets(mage.id).some((s) => s.name === 'Frostfire Regalia')).toBe(true);
+  });
+
+  it('dresses a random outfit of epics with no empty armour slot', () => {
+    let seed = 7;
+    const random = () => ((seed = (seed * 48271) % 2147483647) / 2147483647);
+    const outfit = equipment.randomOutfit(4, random);
+    const slots = outfit.map(([slot]) => slot);
+    for (const slot of ['head', 'shoulder', 'back', 'chest', 'wrist', 'hands', 'waist', 'legs', 'feet', 'mainHand']) expect(slots).toContain(slot);
+    for (const [, item] of outfit) expect(item.quality).toBeGreaterThanOrEqual(4);
+    const main = outfit.find(([slot]) => slot === 'mainHand')![1];
+    expect(slots.includes('offHand')).toBe(![17, 15, 26, 25].includes(main.inventoryType));
+  });
 });
