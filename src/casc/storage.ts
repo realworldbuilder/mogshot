@@ -1,11 +1,12 @@
 import { type ByteSource, readText } from '../io/byte-source';
 import { type BlteResult, decodeBlte } from './blte';
 import { type BuildInfoEntry, parseBuildInfo } from './build-info';
+import type { Cache } from './cache';
 import { fromHex } from './bytes';
 import { configPath, parseConfig } from './config';
 import { Encoding } from './encoding';
-import { buildFileIndex, type FileIndex } from './file-index';
-import { type ArchiveLocation, archivePath, loadLocalIndex } from './local-index';
+import { buildFileIndex, FileIndex, type FileIndexStats } from './file-index';
+import { type ArchiveLocation, archivePath, currentIndexFiles, loadLocalIndex } from './local-index';
 import { LOCALE_FLAGS, localeFromTags } from './locale';
 
 /** Each entry in a data archive starts with a 30-byte header before its BLTE container. */
@@ -19,6 +20,8 @@ export interface StorageInfo {
   buildName: string;
   buildKey: string;
   locale: string;
+  /** The file index came from the cache of an earlier visit. */
+  fromCache: boolean;
 }
 
 export type OpenStage = 'config' | 'index' | 'encoding' | 'root' | 'join';
@@ -27,6 +30,19 @@ export interface OpenOptions {
   /** Which product to open when the folder holds several. Defaults to the first active one. */
   product?: string;
   onProgress?: (stage: OpenStage) => void;
+  /** Keeps the file index between visits, so a returning user skips reading the encoding and root files. */
+  cache?: Cache;
+}
+
+/** The file index as stored in the cache. */
+interface StoredIndex {
+  ids: Uint32Array;
+  archives: Uint16Array;
+  offsets: Uint32Array;
+  sizes: Uint32Array;
+  flags: Uint8Array;
+  missing: Uint32Array;
+  stats: FileIndexStats;
 }
 
 /** The folder is not a WoW install, or not one we can read. The message is shown to the user. */
@@ -83,8 +99,6 @@ export class CascStorage {
     const encodingKey = config.get('encoding')?.[1];
     if (!rootKey || !encodingKey) throw new InstallError('The build configuration lists no root or encoding file.');
 
-    progress('index');
-    const localIndex = await loadLocalIndex(source);
     const readLocation = async (location: ArchiveLocation): Promise<BlteResult> => {
       const bytes = await source.read(
         archivePath(location.archive),
@@ -94,19 +108,42 @@ export class CascStorage {
       return decodeBlte(bytes);
     };
 
-    progress('encoding');
-    const encodingLocation = localIndex.find(fromHex(encodingKey));
-    if (!encodingLocation) throw new InstallError('The encoding table is not in the local archives.');
-    const encoding = new Encoding((await readLocation(encodingLocation)).data);
+    // The index files are renamed whenever the game updates, so their names plus the build
+    // identify the archives' contents.
+    const indexNames = currentIndexFiles(await source.list('Data/data'));
+    const cacheKey = `files|${entry.buildKey}|${locale}|${indexNames.join(',')}`;
+    const stored = await options.cache?.get<StoredIndex>(cacheKey);
+    let files: FileIndex;
+    if (stored) {
+      files = new FileIndex(stored.ids, stored.archives, stored.offsets, stored.sizes, stored.flags, stored.missing, stored.stats);
+    } else {
+      progress('index');
+      const localIndex = await loadLocalIndex(source);
 
-    progress('root');
-    const rootEncodingKey = encoding.find(fromHex(rootKey));
-    const rootLocation = rootEncodingKey < 0 ? undefined : localIndex.find(encoding.data, rootEncodingKey);
-    if (!rootLocation) throw new InstallError('The root file is not in the local archives.');
-    const root = (await readLocation(rootLocation)).data;
+      progress('encoding');
+      const encodingLocation = localIndex.find(fromHex(encodingKey));
+      if (!encodingLocation) throw new InstallError('The encoding table is not in the local archives.');
+      const encoding = new Encoding((await readLocation(encodingLocation)).data);
 
-    progress('join');
-    const files = buildFileIndex(root, encoding, localIndex, localeFlag);
+      progress('root');
+      const rootEncodingKey = encoding.find(fromHex(rootKey));
+      const rootLocation = rootEncodingKey < 0 ? undefined : localIndex.find(encoding.data, rootEncodingKey);
+      if (!rootLocation) throw new InstallError('The root file is not in the local archives.');
+      const root = (await readLocation(rootLocation)).data;
+
+      progress('join');
+      files = buildFileIndex(root, encoding, localIndex, localeFlag);
+      const toStore: StoredIndex = {
+        ids: files.ids,
+        archives: files.archives,
+        offsets: files.offsets,
+        sizes: files.sizes,
+        flags: files.flags,
+        missing: files.missing,
+        stats: files.stats,
+      };
+      await options.cache?.put(cacheKey, toStore);
+    }
 
     const info: StorageInfo = {
       product: entry.product,
@@ -114,6 +151,7 @@ export class CascStorage {
       buildName: config.get('build-name')?.[0] ?? '',
       buildKey: entry.buildKey,
       locale,
+      fromCache: stored !== undefined,
     };
     return new CascStorage(source, info, files);
   }

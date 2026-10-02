@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { MemoryCache } from '../../src/casc/cache';
 import { CascStorage } from '../../src/casc/storage';
 import { hasClient, NodeSource, WOW_DIR } from '../node-source';
 
@@ -81,4 +82,19 @@ describe.skipIf(!hasClient)('CascStorage against the local install', () => {
   it('opens within the first-load budget', () => {
     expect(openMs).toBeLessThan(30_000);
   });
+
+  it('opens again from the cache with the same index, much faster', async () => {
+    const cache = new MemoryCache();
+    const first = await CascStorage.open(new NodeSource(WOW_DIR), { cache });
+    expect(first.info.fromCache).toBe(false);
+    const start = performance.now();
+    const second = await CascStorage.open(new NodeSource(WOW_DIR), { cache });
+    const ms = performance.now() - start;
+    console.log(`reopened from cache in ${ms.toFixed(0)} ms`);
+    expect(second.info.fromCache).toBe(true);
+    expect(second.files.stats).toEqual(first.files.stats);
+    expect(second.files.find(1011653)).toEqual(first.files.find(1011653));
+    expect(ms).toBeLessThan(openMs / 2);
+    expect((await second.readFile(1305311))!.data.subarray(0, 4)).toEqual((await first.readFile(1305311))!.data.subarray(0, 4));
+  }, 120_000);
 });
