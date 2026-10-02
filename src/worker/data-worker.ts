@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { IndexedDbCache } from '../casc/cache';
 import { CascStorage, InstallError, listProducts } from '../casc/storage';
 import { Appearance } from '../character/appearance';
 import { Equipment } from '../character/equipment';
@@ -16,11 +17,12 @@ let equipment: Promise<Equipment> | undefined;
 // The character last built, kept so it can be posed again without rebuilding.
 let rig: CharacterRig | undefined;
 
+const cache = new IndexedDbCache();
 const definitions = new Definitions(async (url) => {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`${url} answered ${response.status}`);
   return response.text();
-});
+}, cache);
 
 const post = (message: Response, transfer: Transferable[] = []) =>
   (self as DedicatedWorkerGlobalScope).postMessage(message, transfer);
@@ -58,6 +60,7 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       storage = await CascStorage.open(source, {
         product: request.product,
         onProgress: (stage) => post({ id: request.id, type: 'progress', stage }),
+        cache,
       });
       database = new Database(storage, definitions);
       appearance = undefined;

@@ -52,7 +52,9 @@ export function FolderDetails({ opened, dragging, chooser, onProduct }: Props) {
         <dt>High-res textures</dt>
         <dd id="highres">{highRes}</dd>
         <dt>Indexed in</dt>
-        <dd id="indexed">{(opened.ms / 1000).toFixed(1)} s</dd>
+        <dd id="indexed">
+          {(opened.ms / 1000).toFixed(1)} s{info.fromCache ? <span class="dim"> (from an earlier visit)</span> : ''}
+        </dd>
       </dl>
       <p class="small" style="margin-top:14px">{chooser} <span class="dim">or drag another folder onto the page.</span></p>
     </section>

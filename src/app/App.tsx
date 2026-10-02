@@ -116,9 +116,10 @@ export function App() {
         <section class="panel">
           <h2>Start with your World of Warcraft folder</h2>
           <p>
-            Mogshot draws characters from the game files on your computer. They are read here and are never
-            uploaded; the only thing downloaded is the community's description of the game's database tables,
-            from GitHub.
+            Pick a race, set the look, put on gear, strike a pose, and download a transparent PNG up to 4K for
+            thumbnails, Canva and overlays. Everything is drawn from the game files on your computer, in this tab.
+            Nothing is uploaded; the only download is the community's description of the game's database
+            tables, from GitHub.
           </p>
           {!chromium && <p class="bad">Mogshot is only tested in Chrome. It may not work in this browser.</p>}
           <div id="drop" class={dragging ? 'over' : ''}>
@@ -133,7 +134,8 @@ export function App() {
           </div>
           <p class="dim small">
             If you use the button, Chrome asks whether to "upload" the files. That is Chrome's wording for letting a
-            page read a folder. Nothing leaves your computer. Not tested on Windows yet.
+            page read a folder; nothing leaves your computer. The first visit reads about 250 MB of index data and
+            takes a few seconds; later visits are quick. Works in Chrome and Edge on a Mac; Windows is untested.
           </p>
           {phase.kind === 'opening' && (
             <p class="dim" id="status">
@@ -163,10 +165,12 @@ export function App() {
       <footer class="dim small">
         <p>
           Mogshot is a fan project. It is not affiliated with or endorsed by Blizzard Entertainment. World of
-          Warcraft is a trademark of Blizzard Entertainment, Inc.
+          Warcraft is a trademark of Blizzard Entertainment, Inc. Game files are read in your browser and never
+          leave your computer; nothing of Blizzard's is stored on this site.
         </p>
         <p>
-          <a href="https://github.com/realworldbuilder/mogshot">Source on GitHub</a>
+          <a href="https://github.com/realworldbuilder/mogshot">Source on GitHub</a> ·{' '}
+          <a href="https://github.com/realworldbuilder/mogshot/issues">Report a problem</a>
         </p>
       </footer>
     </>

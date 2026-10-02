@@ -47,12 +47,42 @@ interface Shown {
   ms: number;
 }
 
+/** What a returning visitor left on screen, kept in the browser. */
+interface Remembered {
+  raceId: number;
+  sex: number;
+  choices: [number, number][];
+  gear: [Slot, ItemSummary][];
+  pose: PoseRequest;
+  size: Size['id'];
+}
+
+const REMEMBER_KEY = 'mogshot.character';
+
+function remembered(): Remembered | undefined {
+  try {
+    const text = localStorage.getItem(REMEMBER_KEY);
+    return text ? (JSON.parse(text) as Remembered) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function remember(value: Remembered): void {
+  try {
+    localStorage.setItem(REMEMBER_KEY, JSON.stringify(value));
+  } catch {
+    // Private windows and full storage: the character is simply not remembered.
+  }
+}
+
 export function Viewer({ data }: { data: DataClient }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<CharacterRenderer>(null);
   const request = useRef(0);
   // The pose to rebuild the character in when its race, looks or gear change.
-  const poseRequest = useRef<PoseRequest>({ preset: 'Stand' });
+  const previous = useRef(remembered());
+  const poseRequest = useRef<PoseRequest>(previous.current?.pose ?? { preset: 'Stand' });
   const camera = useRef<Camera>({ ...DEFAULT_CAMERA });
   // Posing while a pose is still being computed: only the newest request is sent next.
   const posing = useRef<{ busy: boolean; next?: { sequence: number; time: number } }>({ busy: false });
@@ -60,11 +90,12 @@ export function Viewer({ data }: { data: DataClient }) {
   const [races, setRaces] = useState<Race[]>();
   const [character, setCharacter] = useState<Character>();
   // What is worn stays on when the race or sex changes.
-  const [gear, setGear] = useState<ReadonlyMap<Slot, ItemSummary>>(new Map());
+  const [gear, setGear] = useState<ReadonlyMap<Slot, ItemSummary>>(new Map(previous.current?.gear ?? []));
   const [shown, setShown] = useState<Shown>();
   const [pose, setPose] = useState<PoseInfo>();
   const [fov, setFov] = useState(30);
-  const [size, setSize] = useState<Size>(SIZES[0]);
+  const [size, setSize] = useState<Size>(SIZES.find((s) => s.id === previous.current?.size) ?? SIZES[0]);
+  const [racesError, setRacesError] = useState<string>();
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<string>();
   const [exportNote, setExportNote] = useState<{ text: string; bad: boolean }>();
@@ -72,18 +103,39 @@ export function Viewer({ data }: { data: DataClient }) {
 
   const redraw = () => renderer.current?.render(camera.current);
 
-  // The races the game lets you create; start on a human male if there is one.
-  useEffect(() => {
+  // The races the game lets you create. Start where the last visit left off, else on a human male.
+  const loadRaces = () => {
+    setRacesError(undefined);
     data
       .races()
       .then((list) => {
         setRaces(list);
+        const last = previous.current;
+        const lastRace = list.find((race) => race.id === last?.raceId);
+        if (lastRace && last) {
+          setCharacter({ raceId: lastRace.id, sex: lastRace.sexes.includes(last.sex) ? last.sex : (lastRace.sexes[0] ?? 0), choices: last.choices });
+          return;
+        }
         const first = list.find((race) => race.name === 'Human') ?? list[0];
         if (first) setCharacter({ raceId: first.id, sex: first.sexes[0] ?? 0, choices: [] });
-        else setError('The game data lists no races a player can create.');
+        else setRacesError('The game data lists no races a player can create.');
       })
-      .catch((cause) => setError(messageOf(cause)));
-  }, [data]);
+      .catch((cause) => setRacesError(messageOf(cause)));
+  };
+  useEffect(loadRaces, [data]);
+
+  // Keep what is on screen for the next visit.
+  useEffect(() => {
+    if (!character || !shown) return;
+    remember({
+      raceId: character.raceId,
+      sex: character.sex,
+      choices: [...shown.choices],
+      gear: [...gear],
+      pose: poseRequest.current,
+      size: size.id,
+    });
+  }, [character, shown, gear, size, pose]);
 
   // Build and draw whenever the character changes. A newer request supersedes an older one.
   useEffect(() => {
@@ -263,12 +315,15 @@ export function Viewer({ data }: { data: DataClient }) {
 
   return (
     <section class="panel" id="character">
-      {error && (
+      {(error ?? racesError) && (
         <p class="bad" id="character-error">
-          The character could not be drawn: {error}
+          The character could not be drawn: {error ?? racesError}{' '}
+          <button class="plain" id="retry" onClick={() => (races ? setCharacter(character && { ...character }) : loadRaces())}>
+            Try again
+          </button>
         </p>
       )}
-      {!races && !error && <p class="dim">Reading the game database…</p>}
+      {!races && !racesError && <p class="dim">Reading the game database…</p>}
       {races && character && (
         <div class="viewer">
           <div>
@@ -433,6 +488,31 @@ export function Viewer({ data }: { data: DataClient }) {
                 // Choices only non-player characters or special classes can use are left out.
                 const choices = option.choices.filter((choice) => choice.available || choice.id === current);
                 let unnamed = 0;
+                // Colour options show their colours; everything else is a list.
+                if (choices.length > 0 && choices.every((choice) => choice.swatches.length > 0)) {
+                  return (
+                    <div class="field" key={option.id}>
+                      <span>{option.name}</span>
+                      <div class="swatches" data-option={option.name} role="radiogroup">
+                        {choices.map((choice, i) => (
+                          <button
+                            role="radio"
+                            aria-checked={choice.id === current}
+                            class={choice.id === current ? 'on' : ''}
+                            title={choice.name || `${option.name} ${i + 1}`}
+                            style={{
+                              background:
+                                choice.swatches.length > 1
+                                  ? `linear-gradient(135deg, ${choice.swatches[0]} 50%, ${choice.swatches[1]} 50%)`
+                                  : choice.swatches[0],
+                            }}
+                            onClick={() => choose(option.id, choice.id)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }
                 return (
                   <label class="field" key={option.id}>
                     <span>{option.name}</span>

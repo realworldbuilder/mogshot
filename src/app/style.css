@@ -395,3 +395,23 @@ select {
 .result-count {
   margin: 0;
 }
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.swatches button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 2px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.swatches button.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
