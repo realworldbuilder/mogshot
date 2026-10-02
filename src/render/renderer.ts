@@ -1,8 +1,10 @@
 import type { CharacterScene, SceneDraw } from '../character/scene';
 import { VERTEX_SIZE } from '../formats/m2';
-import { lookAt, perspective, transformPoint } from '../math/mat4';
+import type { Image } from '../formats/blp';
+import { lookAt, type Mat4, perspective, transformPoint } from '../math/mat4';
+import { alphaBounds } from './export';
 import { combiners } from './shader-table';
-import { FRAGMENT_SOURCE, VERTEX_SOURCE } from './shaders';
+import { DOWNSAMPLE_FRAGMENT_SOURCE, DOWNSAMPLE_VERTEX_SOURCE, FRAGMENT_SOURCE, VERTEX_SOURCE } from './shaders';
 
 /** Where the camera is, as an orbit around the character. Angles in radians. */
 export interface Camera {
@@ -17,6 +19,26 @@ export interface Camera {
 }
 
 export const DEFAULT_CAMERA: Camera = { yaw: 0, pitch: 0, fov: (30 * Math.PI) / 180, zoom: 1 };
+
+export interface ImageOptions {
+  /** Size of the longer side in pixels. */
+  longSide: number;
+  /** Width over height of the frame, used when not cropping. */
+  aspect: number;
+  /** Frame the picture tightly around the character instead of using `aspect`. */
+  tight: boolean;
+}
+
+/** Samples a picture may use in total, to stay within the memory of ordinary graphics cards. */
+const MAX_SAMPLES = 64_000_000;
+
+/** Part of the camera's view, in its -1..1 coordinates (y up). */
+interface Frame {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
 
 interface PreparedDraw {
   draw: SceneDraw;
@@ -33,6 +55,7 @@ const UNIFORMS = [
 export class CharacterRenderer {
   private readonly gl: WebGL2RenderingContext;
   private readonly program: WebGLProgram;
+  private readonly downsample: WebGLProgram;
   private readonly uniforms = {} as Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>;
   private readonly vao: WebGLVertexArrayObject;
   private readonly vertexBuffer: WebGLBuffer;
@@ -50,6 +73,7 @@ export class CharacterRenderer {
     if (!gl) throw new Error('This browser cannot create a WebGL2 context');
     this.gl = gl;
     this.program = link(gl, VERTEX_SOURCE, FRAGMENT_SOURCE);
+    this.downsample = link(gl, DOWNSAMPLE_VERTEX_SOURCE, DOWNSAMPLE_FRAGMENT_SOURCE);
     for (const name of UNIFORMS) this.uniforms[name] = gl.getUniformLocation(this.program, name);
 
     this.vao = gl.createVertexArray()!;
@@ -133,16 +157,152 @@ export class CharacterRenderer {
       .map(({ d }) => d);
   }
 
-  /** Draw the scene. The canvas's pixel size is used as it is. */
+  /** Draw the scene to the canvas. The canvas's pixel size is used as it is. */
   render(camera: Camera = DEFAULT_CAMERA): void {
-    const { gl, canvas, uniforms } = this;
-    gl.viewport(0, 0, canvas.width, canvas.height);
+    const { gl, canvas } = this;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const { view, projection } = this.cameraMatrices(camera, canvas.width / canvas.height);
+    this.draw(view, projection, canvas.width, canvas.height);
+  }
+
+  /**
+   * Draw the scene to an image of any size, supersampled. The result is premultiplied
+   * RGBA with rows top to bottom; convert it with `unpremultiply` before saving.
+   */
+  renderImage(camera: Camera, options: ImageOptions): Image {
+    let aspect = options.aspect;
+    let frame: Frame = { x0: -1, x1: 1, y0: -1, y1: 1 };
+    if (options.tight) {
+      // Find the character in a small draft, then aim the full-size picture at just that part.
+      const draftWidth = aspect >= 1 ? 512 : Math.round(512 * aspect);
+      const draftHeight = aspect >= 1 ? Math.round(512 / aspect) : 512;
+      const draft = this.drawOffscreen(camera, aspect, frame, draftWidth, draftHeight);
+      const box = alphaBounds(draft);
+      if (box) {
+        const pad = 3;
+        const left = Math.max(0, box.x - pad);
+        const top = Math.max(0, box.y - pad);
+        const right = Math.min(draftWidth, box.x + box.width + pad);
+        const bottom = Math.min(draftHeight, box.y + box.height + pad);
+        frame = {
+          x0: (left / draftWidth) * 2 - 1,
+          x1: (right / draftWidth) * 2 - 1,
+          y0: 1 - (bottom / draftHeight) * 2,
+          y1: 1 - (top / draftHeight) * 2,
+        };
+        // The frame is a crop of the full view, so the camera keeps the full view's aspect.
+        const cropAspect = (right - left) / (bottom - top);
+        const width = cropAspect >= 1 ? options.longSide : Math.round(options.longSide * cropAspect);
+        const height = cropAspect >= 1 ? Math.round(options.longSide / cropAspect) : options.longSide;
+        return this.drawOffscreen(camera, aspect, frame, width, height);
+      }
+    }
+    const width = aspect >= 1 ? options.longSide : Math.round(options.longSide * aspect);
+    const height = aspect >= 1 ? Math.round(options.longSide / aspect) : options.longSide;
+    aspect = width / height;
+    return this.drawOffscreen(camera, aspect, frame, width, height);
+  }
+
+  /** Render the part of the camera's view inside `frame` to a width x height image. */
+  private drawOffscreen(camera: Camera, aspect: number, frame: Frame, width: number, height: number): Image {
+    const { gl } = this;
+    const limit = Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE)) as number;
+    if (width > limit || height > limit) throw new Error(`This graphics card cannot draw a picture larger than ${limit} pixels`);
+    // Supersample as much as fits: each output pixel is the average of factor x factor samples.
+    let factor = 3;
+    while (factor > 1 && (width * factor > limit || height * factor > limit || width * height * factor * factor > MAX_SAMPLES)) factor--;
+    const bigWidth = width * factor;
+    const bigHeight = height * factor;
+    let samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number);
+    while (samples > 1 && bigWidth * bigHeight * samples > MAX_SAMPLES) samples >>= 1;
+
+    const { view, projection } = this.cameraMatrices(camera, aspect);
+    // Zoom the projection so that `frame` (in the full view's -1..1 coordinates) fills the picture.
+    const sx = 2 / (frame.x1 - frame.x0);
+    const sy = 2 / (frame.y1 - frame.y0);
+    const tx = -(frame.x1 + frame.x0) / (frame.x1 - frame.x0);
+    const ty = -(frame.y1 + frame.y0) / (frame.y1 - frame.y0);
+    for (let column = 0; column < 4; column++) {
+      projection[column * 4] = sx * projection[column * 4]! + tx * projection[column * 4 + 3]!;
+      projection[column * 4 + 1] = sy * projection[column * 4 + 1]! + ty * projection[column * 4 + 3]!;
+    }
+
+    const color = gl.createRenderbuffer();
+    const depth = gl.createRenderbuffer();
+    const drawBuffer = gl.createFramebuffer();
+    const resolved = gl.createTexture();
+    const resolveBuffer = gl.createFramebuffer();
+    const output = gl.createTexture();
+    const outputBuffer = gl.createFramebuffer();
+    try {
+      gl.bindRenderbuffer(gl.RENDERBUFFER, color);
+      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.RGBA8, bigWidth, bigHeight);
+      gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.DEPTH_COMPONENT24, bigWidth, bigHeight);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, drawBuffer);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, color);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+        throw new Error('The graphics card could not allocate the picture');
+      }
+      this.draw(view, projection, bigWidth, bigHeight);
+
+      const target = (texture: WebGLTexture | null, buffer: WebGLFramebuffer | null, w: number, h: number) => {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, buffer);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+      };
+      // Resolve the multisampled buffer, then average it down to the output size.
+      target(resolved, resolveBuffer, bigWidth, bigHeight);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, drawBuffer);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, resolveBuffer);
+      gl.blitFramebuffer(0, 0, bigWidth, bigHeight, 0, 0, bigWidth, bigHeight, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+
+      target(output, outputBuffer, width, height);
+      gl.viewport(0, 0, width, height);
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.BLEND);
+      gl.disable(gl.CULL_FACE);
+      gl.useProgram(this.downsample);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, resolved);
+      gl.uniform1i(gl.getUniformLocation(this.downsample, 'u_source'), 0);
+      gl.uniform1i(gl.getUniformLocation(this.downsample, 'u_factor'), factor);
+      gl.bindVertexArray(null);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+      const bottomUp = new Uint8Array(width * height * 4);
+      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, bottomUp);
+      const pixels = new Uint8Array(bottomUp.length);
+      const stride = width * 4;
+      for (let y = 0; y < height; y++) {
+        pixels.set(bottomUp.subarray((height - 1 - y) * stride, (height - y) * stride), y * stride);
+      }
+      return { width, height, pixels };
+    } finally {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.deleteFramebuffer(drawBuffer);
+      gl.deleteFramebuffer(resolveBuffer);
+      gl.deleteFramebuffer(outputBuffer);
+      gl.deleteRenderbuffer(color);
+      gl.deleteRenderbuffer(depth);
+      gl.deleteTexture(resolved);
+      gl.deleteTexture(output);
+    }
+  }
+
+  /** Draw the scene into the bound framebuffer. */
+  private draw(view: Mat4, projection: Mat4, width: number, height: number): void {
+    const { gl, uniforms } = this;
+    gl.viewport(0, 0, width, height);
     gl.clearColor(0, 0, 0, 0);
     gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (this.draws.length === 0) return;
 
-    const { view, projection } = this.cameraMatrices(camera, canvas.width / canvas.height);
     gl.useProgram(this.program);
     gl.uniformMatrix4fv(uniforms.u_view, false, view);
     gl.uniformMatrix4fv(uniforms.u_projection, false, projection);
@@ -191,7 +351,8 @@ export class CharacterRenderer {
 
   /**
    * The model's blend modes. Colour is accumulated premultiplied by coverage, so the canvas
-   * holds a correct transparent image. Modes that only add or multiply light leave coverage alone.
+   * holds a correct transparent image. Additive modes count their brightness as coverage
+   * (set in the shader); modes that multiply leave coverage alone.
    */
   private applyBlend(mode: number): void {
     const { gl } = this;
@@ -202,8 +363,8 @@ export class CharacterRenderer {
     gl.enable(gl.BLEND);
     switch (mode) {
       case 2: gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA); break; // alpha
-      case 3: gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ZERO, gl.ONE); break; // add, ignoring alpha
-      case 4: gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE); break; // add
+      case 3: // add, ignoring alpha
+      case 4: gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ONE, gl.ONE_MINUS_SRC_ALPHA); break; // add (scaled in the shader)
       case 5: gl.blendFuncSeparate(gl.DST_COLOR, gl.ZERO, gl.ZERO, gl.ONE); break; // modulate
       case 6: gl.blendFuncSeparate(gl.DST_COLOR, gl.SRC_COLOR, gl.ZERO, gl.ONE); break; // modulate 2x
       default: gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA); break; // blend-add

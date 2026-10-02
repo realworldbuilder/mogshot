@@ -196,19 +196,50 @@ void main() {
     default: diffuse = tex1.rgb; break;
   }
 
-  // Blend modes 0 (opaque) and 1 (alpha key) draw solid; alpha key cuts out below one half.
-  float opacity = v_edge_fade;
-  if (u_blend_mode == 1) {
-    if (has_alpha && alpha < 0.501960814) discard;
-  } else if (u_blend_mode != 0) {
-    opacity *= alpha;
-  }
+  if (u_blend_mode == 1 && has_alpha && alpha < 0.501960814) discard; // alpha key: cut out below one half
 
   vec3 color = diffuse;
   if (!u_unlit) {
     float n_dot_l = max(dot(normalize(v_normal), -normalize(u_light_direction)), 0.0);
     color *= clamp(u_ambient + u_light_color * n_dot_l, 0.0, 1.0);
   }
-  frag_color = vec4(color + specular, opacity);
+  color += specular;
+
+  // What goes to the blender. The framebuffer holds colour premultiplied by coverage, so
+  // that the finished picture has correct transparency (see applyBlend in renderer.ts).
+  float coverage = 1.0;
+  if (u_blend_mode == 3 || u_blend_mode == 4) {
+    // Additive light (glows). It has no real coverage; over a transparent background its
+    // coverage is taken to be its brightness, which reproduces it exactly over black.
+    if (u_blend_mode == 4) color *= alpha * v_edge_fade;
+    coverage = clamp(max(color.r, max(color.g, color.b)), 0.0, 1.0);
+  } else if (u_blend_mode >= 2) {
+    coverage = alpha * v_edge_fade;
+  }
+  frag_color = vec4(color, coverage);
+}
+`;
+
+/** Averages blocks of the supersampled picture down to the output size. */
+export const DOWNSAMPLE_VERTEX_SOURCE = `#version 300 es
+void main() {
+  // One triangle that covers the whole target.
+  vec2 corner = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+}
+`;
+
+export const DOWNSAMPLE_FRAGMENT_SOURCE = `#version 300 es
+precision highp float;
+uniform sampler2D u_source;
+uniform int u_factor;
+out vec4 frag_color;
+void main() {
+  ivec2 base = ivec2(gl_FragCoord.xy) * u_factor;
+  vec4 sum = vec4(0.0);
+  for (int y = 0; y < u_factor; y++) {
+    for (int x = 0; x < u_factor; x++) sum += texelFetch(u_source, base + ivec2(x, y), 0);
+  }
+  frag_color = sum / float(u_factor * u_factor);
 }
 `;
