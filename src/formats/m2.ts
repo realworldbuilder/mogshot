@@ -38,6 +38,9 @@ export interface M2Sequence {
 export const SEQUENCE_INLINE = 0x20;
 export const SEQUENCE_ALIAS = 0x40;
 
+/** Bone flag: the bone turns to face the camera (glows and other flat effects hang from such bones). */
+export const BONE_BILLBOARD = 0x8;
+
 export interface M2Bone {
   /** Well-known role of the bone (arm, head, finger ...), or -1. */
   keyBoneId: number;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { identity, lookAt, multiply, perspective, pivotTransform, transformPoint } from '../src/math/mat4';
+import { identity, invert, lookAt, multiply, perspective, pivotTransform, transformPoint } from '../src/math/mat4';
 
 const close = (a: readonly number[], b: readonly number[]) => a.forEach((v, i) => expect(v).toBeCloseTo(b[i]!, 5));
 
@@ -35,5 +35,11 @@ describe('mat4', () => {
     const clip = multiply(new Float32Array(16), perspective(Math.PI / 2, 1, 0.1, 100), view);
     const [x, y] = transformPoint(clip, [0, 0, 1]);
     close([x, y], [0, 0]);
+  });
+
+  it('inverts a transform', () => {
+    const m = pivotTransform(new Float32Array(16), [1, 2, 3], [4, 5, 6], [0, 0, Math.SQRT1_2, Math.SQRT1_2], [2, 2, 2]);
+    const product = multiply(new Float32Array(16), m, invert(new Float32Array(16), m));
+    close(Array.from(product), Array.from(identity()));
   });
 });
