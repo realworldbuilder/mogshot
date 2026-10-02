@@ -1,0 +1,130 @@
+import { type ByteSource, readText } from '../io/byte-source';
+import { type BlteResult, decodeBlte } from './blte';
+import { type BuildInfoEntry, parseBuildInfo } from './build-info';
+import { fromHex } from './bytes';
+import { configPath, parseConfig } from './config';
+import { Encoding } from './encoding';
+import { buildFileIndex, type FileIndex } from './file-index';
+import { type ArchiveLocation, archivePath, loadLocalIndex } from './local-index';
+import { LOCALE_FLAGS, localeFromTags } from './locale';
+
+/** Each entry in a data archive starts with a 30-byte header before its BLTE container. */
+const ARCHIVE_ENTRY_HEADER = 30;
+
+export interface StorageInfo {
+  product: string;
+  /** e.g. "1.60.1.70170" */
+  version: string;
+  /** e.g. "WOW-70170patch1.60.1_Beta" */
+  buildName: string;
+  buildKey: string;
+  locale: string;
+}
+
+export type OpenStage = 'config' | 'index' | 'encoding' | 'root' | 'join';
+
+export interface OpenOptions {
+  /** Which product to open when the folder holds several. Defaults to the first active one. */
+  product?: string;
+  onProgress?: (stage: OpenStage) => void;
+}
+
+/** The folder is not a WoW install, or not one we can read. The message is shown to the user. */
+export class InstallError extends Error {}
+
+/** The products listed in a folder's `.build.info`. */
+export async function listProducts(source: ByteSource): Promise<BuildInfoEntry[]> {
+  const rootNames = await source.list('');
+  if (!rootNames.includes('.build.info')) {
+    const hint = rootNames.includes('data') && rootNames.includes('config')
+      ? ' You picked the Data folder; pick the folder that contains it.'
+      : rootNames.some((name) => /^_.+_$/.test(name)) || rootNames.includes('Data')
+        ? ' The folder looks like a WoW install that has never been launched or updated.'
+        : '';
+    throw new InstallError(`This folder has no .build.info file, so it is not a World of Warcraft folder.${hint}`);
+  }
+  return parseBuildInfo(await readText(source, '.build.info'));
+}
+
+/** Read-only access to the files of one installed product, by file ID, from the local archives only. */
+export class CascStorage {
+  private constructor(
+    private readonly source: ByteSource,
+    readonly info: StorageInfo,
+    readonly files: FileIndex,
+  ) {}
+
+  static async open(source: ByteSource, options: OpenOptions = {}): Promise<CascStorage> {
+    const progress = options.onProgress ?? (() => {});
+
+    progress('config');
+    const products = await listProducts(source);
+    const entry = options.product
+      ? products.find((p) => p.product === options.product)
+      : (products.find((p) => p.active) ?? products[0]);
+    if (!entry) throw new InstallError('No installed product found in .build.info.');
+    const locale = localeFromTags(entry.tags) ?? 'enUS';
+    const localeFlag = LOCALE_FLAGS[locale]!;
+
+    let config: Map<string, string[]>;
+    try {
+      config = parseConfig(await readText(source, configPath(entry.buildKey)));
+    } catch {
+      throw new InstallError(
+        `The build configuration for ${entry.product} ${entry.version} is not on disk. Let Battle.net finish updating the game, then try again.`,
+      );
+    }
+    const rootKey = config.get('root')?.[0];
+    const encodingKey = config.get('encoding')?.[1];
+    if (!rootKey || !encodingKey) throw new InstallError('The build configuration lists no root or encoding file.');
+
+    progress('index');
+    const localIndex = await loadLocalIndex(source);
+    const readLocation = async (location: ArchiveLocation): Promise<BlteResult> => {
+      const bytes = await source.read(
+        archivePath(location.archive),
+        location.offset + ARCHIVE_ENTRY_HEADER,
+        location.size - ARCHIVE_ENTRY_HEADER,
+      );
+      return decodeBlte(bytes);
+    };
+
+    progress('encoding');
+    const encodingLocation = localIndex.find(fromHex(encodingKey));
+    if (!encodingLocation) throw new InstallError('The encoding table is not in the local archives.');
+    const encoding = new Encoding((await readLocation(encodingLocation)).data);
+
+    progress('root');
+    const rootEncodingKey = encoding.find(fromHex(rootKey));
+    const rootLocation = rootEncodingKey < 0 ? undefined : localIndex.find(encoding.data, rootEncodingKey);
+    if (!rootLocation) throw new InstallError('The root file is not in the local archives.');
+    const root = (await readLocation(rootLocation)).data;
+
+    progress('join');
+    const files = buildFileIndex(root, encoding, localIndex, localeFlag);
+
+    const info: StorageInfo = {
+      product: entry.product,
+      version: entry.version,
+      buildName: config.get('build-name')?.[0] ?? '',
+      buildKey: entry.buildKey,
+      locale,
+    };
+    return new CascStorage(source, info, files);
+  }
+
+  /**
+   * Read a file by ID from the local archives. Returns undefined if no copy is on disk.
+   * Encrypted chunks come back zero-filled and listed in `encrypted`.
+   */
+  async readFile(fileId: number): Promise<BlteResult | undefined> {
+    const entry = this.files.find(fileId);
+    if (!entry) return undefined;
+    const bytes = await this.source.read(
+      archivePath(entry.archive),
+      entry.offset + ARCHIVE_ENTRY_HEADER,
+      entry.size - ARCHIVE_ENTRY_HEADER,
+    );
+    return decodeBlte(bytes);
+  }
+}
