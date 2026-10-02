@@ -275,11 +275,119 @@ test('exports a clean transparent PNG', async ({ page }) => {
   writePng('test-results/export-head-white.png', over(crop, [255, 255, 255]));
   writePng('test-results/export-head-magenta.png', over(crop, [255, 0, 255]));
 
-  // Uncropped: the canvas's shape, 3840 tall.
-  await page.locator('#tight').uncheck();
-  const full = await save('export-full');
-  expect(full.height).toBe(3840);
-  expect(full.width).toBe(2880);
+  // Fixed sizes come out at exactly that size.
+  for (const [id, width, height] of [['4k', 3840, 2160], ['1080p', 1920, 1080], ['youtube', 1280, 720], ['square', 2160, 2160]] as const) {
+    await page.locator('#size').selectOption(id);
+    const fixed = await save(`export-${id}`);
+    expect([fixed.width, fixed.height]).toEqual([width, height]);
+    // The character is in the picture and the corners are clear.
+    expect(alphaAt(fixed, 0, 0)).toBe(0);
+    expect(alphaAt(fixed, width >> 1, height >> 1)).toBe(255);
+  }
+});
+
+/** Do something that changes the pose and wait for the new pose to be on the canvas. */
+async function repose(page: Page, action: () => Promise<unknown>): Promise<void> {
+  const before = await page.locator('#canvas').getAttribute('data-pose');
+  await action();
+  await expect(page.locator('#canvas')).not.toHaveAttribute('data-pose', before ?? '', { timeout: 30_000 });
+}
+
+test('strikes every curated pose, dressed and armed', async ({ page }) => {
+  test.setTimeout(300_000);
+  await load(page, false);
+  await openAndDraw(page);
+  for (const [slot, name] of PLATE) await equip(page, slot, name);
+  for (const [race, sex] of [['Human', 'Male'], ['Tauren', 'Female'], ['Gnome', 'Male']]) {
+    await redraw(page, async () => {
+      await page.locator('#race').selectOption({ label: race! });
+      if ((await page.locator('#sex .on').innerText()) !== sex) await page.locator('#sex button', { hasText: new RegExp(`^${sex}$`) }).click();
+    }).catch(() => undefined); // the first combination may already be on screen
+    const names = await page.locator('#presets button').allInnerTexts();
+    expect(names).toEqual(['Stand', 'Ready', 'Attack', 'Cast', 'Roar', 'Cheer', 'Point', 'Flex', 'Salute', 'Wave', 'Kneel']);
+    const pictures = new Set<string>();
+    for (const name of names) {
+      const button = page.locator('#presets button', { hasText: new RegExp(`^${name}$`) });
+      if (name !== 'Stand') await repose(page, () => button.click());
+      else await button.click();
+      await expect(button).toHaveClass(/on/);
+      const file = `${race} ${sex} ${name}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const shot = await page.locator('#canvas').screenshot({ path: `test-results/poses/${file}.png` });
+      pictures.add(shot.toString('base64'));
+      expect(await problemsShown(page)).toEqual([]);
+    }
+    // Every pose is a different picture.
+    expect(pictures.size).toBe(names.length);
+  }
+});
+
+test('keeps the pose when the race changes', async ({ page }) => {
+  await load(page, false);
+  await openAndDraw(page);
+  await repose(page, () => page.locator('#presets button', { hasText: /^Cheer$/ }).click());
+  await redraw(page, () => page.locator('#race').selectOption({ label: 'Orc' }));
+  await expect(page.locator('#presets button.on')).toHaveText('Cheer');
+});
+
+test('scrubs through any animation', async ({ page }) => {
+  await load(page, false);
+  await openAndDraw(page);
+  const start = await page.locator('#canvas').screenshot();
+  await repose(page, () => page.locator('#animation').selectOption({ label: 'EmoteDance' }));
+  await expect(page.locator('#time-label')).toContainText('0.00 of');
+  // No curated pose is selected once an animation is picked by hand.
+  await expect(page.locator('#presets button.on')).toHaveCount(0);
+  const first = await page.locator('#canvas').screenshot();
+  await repose(page, () => page.locator('#time').fill('900'));
+  await expect(page.locator('#time-label')).toContainText('0.90 of');
+  const later = await page.locator('#canvas').screenshot({ path: 'test-results/dance.png' });
+  expect(first.equals(start)).toBe(false);
+  expect(later.equals(first)).toBe(false);
+  expect(await problemsShown(page)).toEqual([]);
+});
+
+test('turns, zooms and resets the camera', async ({ page }) => {
+  await load(page, false);
+  await openAndDraw(page);
+  const canvas = page.locator('#canvas');
+  const front = await canvas.screenshot();
+  const box = (await canvas.boundingBox())!;
+  const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 150, centre.y - 20, { steps: 5 });
+  await page.mouse.up();
+  const turned = await canvas.screenshot({ path: 'test-results/camera-turned.png' });
+  expect(turned.equals(front)).toBe(false);
+
+  await page.mouse.wheel(0, -400);
+  const zoomed = await canvas.screenshot({ path: 'test-results/camera-zoomed.png' });
+  expect(zoomed.equals(turned)).toBe(false);
+
+  await page.locator('#fov').fill('60');
+  const wide = await canvas.screenshot({ path: 'test-results/camera-wide.png' });
+  expect(wide.equals(zoomed)).toBe(false);
+
+  await page.locator('#reset-view').click();
+  expect((await canvas.screenshot()).equals(front)).toBe(true);
+});
+
+test('copies the picture to the clipboard', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await load(page, false);
+  await openAndDraw(page);
+  await page.locator('#size').selectOption('youtube');
+  await page.locator('#copy').click();
+  await expect(page.locator('#export-note')).toContainText('Copied 1,280 × 720');
+  const copied = await page.evaluate(async () => {
+    const [item] = await navigator.clipboard.read();
+    const blob = await item!.getType('image/png');
+    const bitmap = await createImageBitmap(blob);
+    return { types: item!.types, bytes: blob.size, width: bitmap.width, height: bitmap.height };
+  });
+  expect(copied.types).toContain('image/png');
+  expect([copied.width, copied.height]).toEqual([1280, 720]);
 });
 
 test('exports a glowing weapon with its glow as transparency', async ({ page }) => {
