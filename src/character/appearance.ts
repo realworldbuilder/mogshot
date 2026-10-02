@@ -29,6 +29,8 @@ export interface Choice {
   name: string;
   /** False for choices only non-player characters or special classes can use. */
   available: boolean;
+  /** Up to two CSS colours for colour choices (skin, hair, eyes), as the game shows them. */
+  swatches: string[];
 }
 
 export interface Option {
@@ -131,7 +133,7 @@ export class Appearance {
       database.table('CreatureDisplayInfo', ['ModelID']),
       database.table('CreatureModelData', ['FileDataID']),
       database.table('ChrCustomizationOption', ['Name_lang', 'ChrModelID', 'OrderIndex', 'Flags']),
-      database.table('ChrCustomizationChoice', ['Name_lang', 'ChrCustomizationOptionID', 'ChrCustomizationReqID', 'OrderIndex']),
+      database.table('ChrCustomizationChoice', ['Name_lang', 'ChrCustomizationOptionID', 'ChrCustomizationReqID', 'OrderIndex', 'SwatchColor']),
       database.table('ChrCustomizationReq', ['ReqType', 'ClassMask']),
       database.table('ChrCustomizationElement', [
         'ChrCustomizationChoiceID', 'RelatedChrCustomizationChoiceID', 'ChrCustomizationGeosetID',
@@ -188,7 +190,11 @@ export class Appearance {
               const classMask = n(req?.ClassMask);
               const available =
                 !req || ((n(req.ReqType) & REQ_PLAYER) !== 0 && (classMask === 0 || (classMask & CLASS_ORDINARY) !== 0));
-              return { id: n(choice.ID), name: String(choice.Name_lang), available };
+              // Swatch colours are stored as ARGB words; 0 means none.
+              const swatches = ((choice.SwatchColor as number[] | undefined) ?? [])
+                .filter((color) => color !== 0)
+                .map((color) => `#${(color & 0xffffff).toString(16).padStart(6, '0')}`);
+              return { id: n(choice.ID), name: String(choice.Name_lang), available, swatches };
             }),
           })),
       );
