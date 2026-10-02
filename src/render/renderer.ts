@@ -40,7 +40,16 @@ interface Frame {
   y1: number;
 }
 
+/** One mesh's buffers on the graphics card. */
+interface GpuMesh {
+  vao: WebGLVertexArrayObject;
+  vertexBuffer: WebGLBuffer;
+  indexBuffer: WebGLBuffer;
+  boneTexture: WebGLTexture;
+}
+
 interface PreparedDraw {
+  mesh: GpuMesh;
   draw: SceneDraw;
   vertexShader: number;
   pixelShader: number;
@@ -57,11 +66,8 @@ export class CharacterRenderer {
   private readonly program: WebGLProgram;
   private readonly downsample: WebGLProgram;
   private readonly uniforms = {} as Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>;
-  private readonly vao: WebGLVertexArrayObject;
-  private readonly vertexBuffer: WebGLBuffer;
-  private readonly indexBuffer: WebGLBuffer;
-  private readonly boneTexture: WebGLTexture;
   private readonly white: WebGLTexture;
+  private meshes: GpuMesh[] = [];
   private textures: WebGLTexture[] = [];
   private draws: PreparedDraw[] = [];
   private bounds: CharacterScene['bounds'] = { min: [0, 0, 0], max: [0, 0, 0] };
@@ -76,32 +82,6 @@ export class CharacterRenderer {
     this.downsample = link(gl, DOWNSAMPLE_VERTEX_SOURCE, DOWNSAMPLE_FRAGMENT_SOURCE);
     for (const name of UNIFORMS) this.uniforms[name] = gl.getUniformLocation(this.program, name);
 
-    this.vao = gl.createVertexArray()!;
-    this.vertexBuffer = gl.createBuffer()!;
-    this.indexBuffer = gl.createBuffer()!;
-    gl.bindVertexArray(this.vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
-    // The model's 48-byte vertex, used as stored.
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, VERTEX_SIZE, 0);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, VERTEX_SIZE, 12);
-    gl.enableVertexAttribArray(2);
-    gl.vertexAttribIPointer(2, 4, gl.UNSIGNED_BYTE, VERTEX_SIZE, 16);
-    gl.enableVertexAttribArray(3);
-    gl.vertexAttribPointer(3, 3, gl.FLOAT, false, VERTEX_SIZE, 20);
-    gl.enableVertexAttribArray(4);
-    gl.vertexAttribPointer(4, 2, gl.FLOAT, false, VERTEX_SIZE, 32);
-    gl.enableVertexAttribArray(5);
-    gl.vertexAttribPointer(5, 2, gl.FLOAT, false, VERTEX_SIZE, 40);
-    gl.bindVertexArray(null);
-
-    this.boneTexture = gl.createTexture()!;
-    gl.bindTexture(gl.TEXTURE_2D, this.boneTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-
     this.white = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.white);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
@@ -112,14 +92,46 @@ export class CharacterRenderer {
     this.problems = [];
     this.bounds = scene.bounds;
 
-    gl.bindVertexArray(this.vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, scene.vertices, gl.STATIC_DRAW);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, scene.indices, gl.STATIC_DRAW);
-    gl.bindVertexArray(null);
+    for (const mesh of this.meshes) {
+      gl.deleteVertexArray(mesh.vao);
+      gl.deleteBuffer(mesh.vertexBuffer);
+      gl.deleteBuffer(mesh.indexBuffer);
+      gl.deleteTexture(mesh.boneTexture);
+    }
+    this.meshes = scene.meshes.map((mesh) => {
+      const vao = gl.createVertexArray()!;
+      const vertexBuffer = gl.createBuffer()!;
+      const indexBuffer = gl.createBuffer()!;
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, mesh.vertices, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+      // The model's 48-byte vertex, used as stored.
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, VERTEX_SIZE, 0);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, VERTEX_SIZE, 12);
+      gl.enableVertexAttribArray(2);
+      gl.vertexAttribIPointer(2, 4, gl.UNSIGNED_BYTE, VERTEX_SIZE, 16);
+      gl.enableVertexAttribArray(3);
+      gl.vertexAttribPointer(3, 3, gl.FLOAT, false, VERTEX_SIZE, 20);
+      gl.enableVertexAttribArray(4);
+      gl.vertexAttribPointer(4, 2, gl.FLOAT, false, VERTEX_SIZE, 32);
+      gl.enableVertexAttribArray(5);
+      gl.vertexAttribPointer(5, 2, gl.FLOAT, false, VERTEX_SIZE, 40);
+      gl.bindVertexArray(null);
 
-    gl.bindTexture(gl.TEXTURE_2D, this.boneTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 4, scene.bones.length / 16, 0, gl.RGBA, gl.FLOAT, scene.bones);
+      // One bone per row, four texels wide.
+      const boneTexture = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, boneTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      const rows = Math.max(1, mesh.bones.length / 16);
+      const matrices = mesh.bones.length > 0 ? mesh.bones : new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 4, rows, 0, gl.RGBA, gl.FLOAT, matrices);
+      return { vao, vertexBuffer, indexBuffer, boneTexture };
+    });
 
     for (const texture of this.textures) gl.deleteTexture(texture);
     const anisotropy = gl.getExtension('EXT_texture_filter_anisotropic');
@@ -141,14 +153,16 @@ export class CharacterRenderer {
     });
 
     const prepared: PreparedDraw[] = [];
-    for (const draw of scene.draws) {
-      const shaders = combiners(draw.shaderId, draw.textureCount);
-      if (!shaders) {
-        this.problems.push(`Geoset ${draw.sectionId} uses a shader this app does not know (${draw.shaderId})`);
-        continue;
+    scene.meshes.forEach((mesh, meshIndex) => {
+      for (const draw of mesh.draws) {
+        const shaders = combiners(draw.shaderId, draw.textureCount);
+        if (!shaders) {
+          this.problems.push(`Geoset ${draw.sectionId} uses a shader this app does not know (${draw.shaderId})`);
+          continue;
+        }
+        prepared.push({ mesh: this.meshes[meshIndex]!, draw, vertexShader: shaders.vertex, pixelShader: shaders.pixel });
       }
-      prepared.push({ draw, vertexShader: shaders.vertex, pixelShader: shaders.pixel });
-    }
+    });
     // Solid batches first, then blended ones in the model's order of priority and layer.
     const blended = (d: PreparedDraw) => (d.draw.blendMode > 1 ? 1 : 0);
     this.draws = prepared
@@ -312,8 +326,6 @@ export class CharacterRenderer {
     gl.uniform3f(uniforms.u_light_color, 0.6, 0.6, 0.6);
     gl.uniform3f(uniforms.u_light_direction, 0.35, -0.5, -0.8);
 
-    gl.activeTexture(gl.TEXTURE4);
-    gl.bindTexture(gl.TEXTURE_2D, this.boneTexture);
     gl.uniform1i(uniforms.u_bones, 4);
     gl.uniform1i(uniforms.u_texture1, 0);
     gl.uniform1i(uniforms.u_texture2, 1);
@@ -322,9 +334,11 @@ export class CharacterRenderer {
 
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
-    gl.bindVertexArray(this.vao);
 
-    for (const { draw, vertexShader, pixelShader } of this.draws) {
+    for (const { mesh, draw, vertexShader, pixelShader } of this.draws) {
+      gl.bindVertexArray(mesh.vao);
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, mesh.boneTexture);
       gl.uniform1i(uniforms.u_vertex_shader, vertexShader);
       gl.uniform1i(uniforms.u_pixel_shader, pixelShader);
       gl.uniform1i(uniforms.u_blend_mode, draw.blendMode);
