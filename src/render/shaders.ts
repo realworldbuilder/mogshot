@@ -17,6 +17,8 @@ layout(location = 5) in vec2 a_texcoord2;
 
 uniform mat4 u_view;
 uniform mat4 u_projection;
+// Where the mesh sits: identity for the body, the attachment point for things mounted on it.
+uniform mat4 u_model;
 // One bone per row, four texels wide: the columns of its matrix.
 uniform sampler2D u_bones;
 uniform int u_vertex_shader;
@@ -53,6 +55,7 @@ void main() {
     skin /= total;
   }
 
+  skin = u_model * skin;
   vec4 position_view = u_view * skin * vec4(a_position, 1.0);
   gl_Position = u_projection * position_view;
   vec3 normal_view = normalize(mat3(u_view) * mat3(skin) * a_normal);
