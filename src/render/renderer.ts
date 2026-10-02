@@ -1,4 +1,4 @@
-import type { CharacterScene, SceneDraw, SceneMesh } from '../character/scene';
+import type { CharacterScene, PoseResult, SceneDraw, SceneMesh } from '../character/scene';
 import { VERTEX_SIZE } from '../formats/m2';
 import type { Image } from '../formats/blp';
 import { invert, lookAt, type Mat4, multiply, perspective, transformPoint } from '../math/mat4';
@@ -16,9 +16,12 @@ export interface Camera {
   fov: number;
   /** 1 fits the character in the frame with a small margin; larger is further away. */
   zoom: number;
+  /** Shift of the view across and up the frame, in half frame heights. */
+  panX: number;
+  panY: number;
 }
 
-export const DEFAULT_CAMERA: Camera = { yaw: 0, pitch: 0, fov: (30 * Math.PI) / 180, zoom: 1 };
+export const DEFAULT_CAMERA: Camera = { yaw: 0, pitch: 0, fov: (30 * Math.PI) / 180, zoom: 1, panX: 0, panY: 0 };
 
 export interface ImageOptions {
   /** Size of the longer side in pixels. */
@@ -179,6 +182,21 @@ export class CharacterRenderer {
       .map((d, i) => ({ d, i }))
       .sort((a, b) => blended(a.d) - blended(b.d) || a.d.draw.priority - b.d.draw.priority || a.d.draw.layer - b.d.draw.layer || a.i - b.i)
       .map(({ d }) => d);
+  }
+
+  /** Move the scene's meshes to a new pose (see CharacterRig.pose). */
+  setPose(pose: PoseResult): void {
+    const { gl } = this;
+    this.bounds = pose.bounds;
+    pose.meshes.forEach((meshPose, i) => {
+      const mesh = this.meshes[i];
+      if (!mesh || meshPose.bones.length !== mesh.bones.length) return;
+      mesh.bones = meshPose.bones;
+      mesh.transform = meshPose.transform;
+      if (mesh.bones.length === 0) return;
+      gl.bindTexture(gl.TEXTURE_2D, mesh.boneTexture);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 4, mesh.bones.length / 16, gl.RGBA, gl.FLOAT, mesh.bones);
+    });
   }
 
   /** Draw the scene to the canvas. The canvas's pixel size is used as it is. */
@@ -468,12 +486,17 @@ export class CharacterRenderer {
       farthest = Math.min(farthest, toward);
     }
     distance = distance * 1.06 * camera.zoom;
+    // Panning slides the camera and what it looks at together, across the frame.
+    const reach = distance * tanY;
+    const target: [number, number, number] = [0, 1, 2].map(
+      (c) => center[c]! - (right[c]! * camera.panX + up[c]! * camera.panY) * reach,
+    ) as [number, number, number];
     const eye: [number, number, number] = [
-      center[0] + distance * toCamera[0],
-      center[1] + distance * toCamera[1],
-      center[2] + distance * toCamera[2],
+      target[0] + distance * toCamera[0],
+      target[1] + distance * toCamera[1],
+      target[2] + distance * toCamera[2],
     ];
-    const view = lookAt(eye, center, [0, 0, 1]);
+    const view = lookAt(eye, target, up);
     const near = Math.max(0.02, (distance - nearest) * 0.5);
     const far = (distance - farthest) * 1.5 + 1;
     return { view, projection: perspective(camera.fov, aspect, near, far), axes: { toCamera, right, up } };
