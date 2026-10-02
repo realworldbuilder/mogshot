@@ -21,7 +21,9 @@ export class Database {
     if (!file) throw new TableError(`${name}: file ${fileId} is not on disk`);
 
     const header = readHeader(file.data);
-    const layout = findLayout(await this.definitions.dbd(name), header.layoutHash, this.storage.info.version);
+    let layout = findLayout(await this.definitions.dbd(name), header.layoutHash, this.storage.info.version);
+    // A new game build can change a table's layout; a definition kept from an earlier visit may predate it.
+    if (!layout) layout = findLayout(await this.definitions.refresh(name), header.layoutHash, this.storage.info.version);
     if (!layout) {
       throw new TableError(
         `${name}: no definition for layout ${header.layoutHash} (build ${this.storage.info.version})`,
