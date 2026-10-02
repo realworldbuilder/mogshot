@@ -480,6 +480,35 @@ export function Viewer({ data }: { data: DataClient }) {
                 ))}
               </div>
             </div>
+            <div class="shortcuts">
+              <button
+                class="plain"
+                id="random-look"
+                disabled={!shown}
+                onClick={() => {
+                  if (!shown) return;
+                  // A random available choice for every option the game offers.
+                  const choices: [number, number][] = [];
+                  for (const option of shown.options) {
+                    if (option.hidden) continue;
+                    const pool = option.choices.filter((choice) => choice.available);
+                    const pick = pool[Math.floor(Math.random() * pool.length)];
+                    if (pick) choices.push([option.id, pick.id]);
+                  }
+                  setCharacter({ ...character, choices });
+                }}
+              >
+                Random look
+              </button>
+              <button
+                class="plain"
+                id="default-look"
+                disabled={!shown || character.choices.length === 0}
+                onClick={() => setCharacter({ ...character, choices: [] })}
+              >
+                Default look
+              </button>
+            </div>
 
             {shown?.options
               .filter((option) => !option.hidden)
@@ -539,6 +568,7 @@ export function Viewer({ data }: { data: DataClient }) {
             <span class="column-title">Gear</span>
             <GearPanel
               data={data}
+              raceId={character.raceId}
               gear={gear}
               onChange={(slot, item) => {
                 const next = new Map(gear);
@@ -546,6 +576,7 @@ export function Viewer({ data }: { data: DataClient }) {
                 else next.delete(slot);
                 setGear(next);
               }}
+              onOutfit={(outfit) => setGear(new Map(outfit))}
             />
           </div>
         </div>

@@ -12,6 +12,7 @@ What works today, in Chrome on a Mac, against WoW build 1.60.1.70170 (`wow_class
 
 - Drag your World of Warcraft folder onto the page, or choose it with the button. The first visit reads the install's index (a few seconds); later visits reopen it from a cache in the browser in well under a second, and work offline.
 - Pick a race and sex from the ones the game lets you create (ten races in this build), and set each appearance option the character creation screen offers. Colour options are swatches in the game's colours. The character is drawn from the game's own data on a transparent background: skin, face, hair, facial hair, eyes, underwear, face shapes, and the jewellery and other pieces some races add.
+- Shortcuts: a random look (a random choice for every appearance option), a random outfit of epics in every armour slot, the best set for a class the race can be (or any set from the list), and a clear button.
 - Dress the character: each of the thirteen visible slots (head, shoulders, back, chest, shirt, tabard, wrists, hands, waist, legs, feet, main hand, off hand) has a search by name with the items' icons. Armour is painted and shaped on the body, helms, shoulders, weapons and shields are attached, a held weapon closes the hand, and glows face the camera.
 - Pose it: eleven curated poses (Stand, Ready, Attack, Cast, Roar, Cheer, Point, Flex, Salute, Wave, Kneel; Ready and Attack follow the weapon held), or pick any of the model's animations and scrub to a moment of it.
 - Frame it: drag to turn, shift-drag to slide, scroll to zoom, a lens slider from flat to wide, and a reset. The view always starts framed on the character.
@@ -19,7 +20,7 @@ What works today, in Chrome on a Mac, against WoW build 1.60.1.70170 (`wow_class
 - The page remembers the last character, gear, pose and size for the next visit.
 - If something a character or an item needs cannot be read, the page lists it by name under the download button, before you download.
 - The page shows the product and build it found, how many of the build's files are on disk, and whether high-res textures are installed.
-- The 36 database tables the character and gear pipeline needs match wago.tools' export of the same build cell for cell. Sections encrypted with unpublished keys are skipped and counted (69 of 19,293 items in this build).
+- The 37 database tables the character and gear pipeline needs match wago.tools' export of the same build cell for cell. Sections encrypted with unpublished keys are skipped and counted (69 of 19,293 items in this build).
 - The only thing fetched from the network is the table definitions, from wowdev/WoWDBDefs on GitHub, kept in the browser after the first visit.
 
 Known to be wrong or missing:

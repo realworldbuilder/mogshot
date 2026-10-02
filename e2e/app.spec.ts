@@ -462,3 +462,42 @@ test('offers to try again when the table definitions could not be fetched', asyn
   await expect(page.locator('#character-note')).toContainText('Built in', { timeout: 60_000 });
   await expect(page.locator('#character-error')).toHaveCount(0);
 });
+
+test('random look, random epics, and the best set for a class', async ({ page }) => {
+  await load(page, false);
+  await openAndDraw(page);
+  const canvas = page.locator('#canvas');
+
+  const plain = await canvas.screenshot();
+  await redraw(page, () => page.locator('#random-look').click());
+  // A random look is almost surely a different picture; the options show the new choices.
+  expect((await canvas.screenshot()).equals(plain)).toBe(false);
+  await redraw(page, () => page.locator('#default-look').click());
+  await expect(page.locator('select[data-option="Hair Style"] option:checked')).toHaveText('Bald');
+
+  await redraw(page, () => page.locator('#random-epics').click());
+  const worn = page.locator('#gear .slot-pick canvas.icon');
+  expect(await worn.count()).toBeGreaterThanOrEqual(10);
+  for (const slot of ['head', 'shoulder', 'back', 'chest', 'wrist', 'hands', 'waist', 'legs', 'feet', 'mainHand']) {
+    await expect(page.locator(`[data-slot="${slot}"] .item-name`)).not.toHaveText('Empty');
+  }
+  expect(await problemsShown(page)).toEqual([]);
+  await canvas.screenshot({ path: 'test-results/random-epics.png' });
+
+  await page.locator('#class').selectOption({ label: 'Warrior' });
+  await expect(page.locator('#set option')).not.toHaveCount(1);
+  await redraw(page, () => page.locator('#best-set').click());
+  await expect(page.locator('[data-slot="chest"] .item-name')).toHaveText(/Battlegear|Armor|Breastplate|Dreadnaught/);
+  const chest = await page.locator('[data-slot="chest"] .item-name').innerText();
+  console.log('best warrior set chest piece:', chest);
+  expect(await problemsShown(page)).toEqual([]);
+  await canvas.screenshot({ path: 'test-results/best-set.png' });
+
+  await page.locator('#class').selectOption({ label: 'Mage' });
+  const frostfire = await page.locator('#set option', { hasText: 'Frostfire Regalia' }).getAttribute('value');
+  await redraw(page, () => page.locator('#set').selectOption(frostfire!));
+  await expect(page.locator('[data-slot="chest"] .item-name')).toHaveText('Frostfire Robe');
+
+  await redraw(page, () => page.locator('#clear-gear').click());
+  await expect(page.locator('[data-slot="chest"] .item-name')).toHaveText('Empty');
+});

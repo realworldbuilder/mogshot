@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { type ItemSummary, type Slot, SLOTS } from '../character/equipment';
+import { type ClassInfo, type ItemSetInfo, type ItemSummary, type Slot, SLOTS } from '../character/equipment';
 import type { DataClient } from '../worker/client';
 import { messageOf } from './App';
 
@@ -41,17 +41,55 @@ function ItemIcon({ data, fileId }: { data: DataClient; fileId: number }) {
 
 interface Props {
   data: DataClient;
+  /** Race of the character, which decides the classes (and so the sets) on offer. */
+  raceId: number;
   gear: ReadonlyMap<Slot, ItemSummary>;
   onChange: (slot: Slot, item: ItemSummary | undefined) => void;
+  /** Replace everything worn at once. */
+  onOutfit: (outfit: [Slot, ItemSummary][]) => void;
 }
 
-/** One row per visible slot. Clicking a row opens a search of the items that fit it. */
-export function GearPanel({ data, gear, onChange }: Props) {
+const EPIC = 4;
+
+/** One row per visible slot, with shortcuts above. Clicking a row opens a search of the items that fit it. */
+export function GearPanel({ data, raceId, gear, onChange, onOutfit }: Props) {
   const [open, setOpen] = useState<Slot>();
   const [query, setQuery] = useState('');
   const [found, setFound] = useState<{ items: ItemSummary[]; total: number }>();
   const [error, setError] = useState<string>();
   const request = useRef(0);
+  const [classes, setClasses] = useState<ClassInfo[]>([]);
+  const [classId, setClassId] = useState<number>();
+  const [sets, setSets] = useState<ItemSetInfo[]>([]);
+
+  // The classes this race can be, then the sets the chosen class can wear.
+  useEffect(() => {
+    let current = true;
+    data
+      .classes(raceId)
+      .then((list) => {
+        if (!current) return;
+        setClasses(list);
+        setClassId((previous) => (list.some((c) => c.id === previous) ? previous : list[0]?.id));
+      })
+      .catch((cause) => setError(messageOf(cause)));
+    return () => {
+      current = false;
+    };
+  }, [data, raceId]);
+  useEffect(() => {
+    if (classId === undefined) return;
+    let current = true;
+    data
+      .sets(classId)
+      .then((list) => current && setSets(list))
+      .catch((cause) => setError(messageOf(cause)));
+    return () => {
+      current = false;
+    };
+  }, [data, classId]);
+
+  const randomEpics = () => data.randomOutfit(EPIC).then(onOutfit).catch((cause) => setError(messageOf(cause)));
 
   // Search as the user types; a newer search supersedes an older one.
   useEffect(() => {
@@ -80,6 +118,42 @@ export function GearPanel({ data, gear, onChange }: Props) {
 
   return (
     <div class="gear" id="gear">
+      <div class="shortcuts">
+        <button class="plain" id="random-epics" onClick={randomEpics}>
+          Random epics
+        </button>
+        <button class="plain" id="clear-gear" onClick={() => onOutfit([])} disabled={gear.size === 0}>
+          Clear
+        </button>
+      </div>
+      <div class="shortcuts">
+        <select id="class" aria-label="Class" value={classId} onChange={(event) => setClassId(Number(event.currentTarget.value))}>
+          {classes.map((c) => (
+            <option value={c.id}>{c.name}</option>
+          ))}
+        </select>
+        <select
+          id="set"
+          aria-label="Set"
+          value=""
+          disabled={sets.length === 0}
+          onChange={(event) => {
+            const set = sets.find((s) => s.id === Number(event.currentTarget.value));
+            if (set) onOutfit(set.pieces);
+          }}
+        >
+          <option value="">{sets.length === 0 ? 'No sets' : 'Equip a set…'}</option>
+          {sets.map((set) => (
+            <option value={set.id}>
+              {set.name} ({set.pieces.length} pieces, level {set.level})
+            </option>
+          ))}
+        </select>
+        <button class="plain" id="best-set" disabled={sets.length === 0} onClick={() => sets[0] && onOutfit(sets[0].pieces)}>
+          Best set
+        </button>
+      </div>
+      {error && !open && <p class="bad small">{error}</p>}
       {SLOTS.map((slot) => {
         const item = gear.get(slot.id);
         return (

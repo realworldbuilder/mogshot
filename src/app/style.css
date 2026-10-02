@@ -415,3 +415,15 @@ select {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
 }
+
+.shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.shortcuts select {
+  flex: 1;
+  min-width: 90px;
+}
