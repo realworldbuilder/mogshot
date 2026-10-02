@@ -11,9 +11,10 @@ Not usable for making images yet. This section is updated as things actually wor
 What works today, in Chrome on a Mac, against WoW build 1.60.1.70170 (`wow_classic_beta`):
 
 - Drag your World of Warcraft folder onto the page, or choose it with the button. The page names the product and build, counts how many of the build's files are on disk, says whether high-res textures are installed, and reads a database table, a model and a texture from the local archives.
-- Nothing is fetched from the network after the folder is given.
+- It decodes the game's database tables. The 33 tables the character and gear pipeline needs match wago.tools' export of the same build cell for cell. Sections encrypted with unpublished keys are skipped and counted (69 of 19,293 items in this build).
+- The only thing fetched from the network after the folder is given is the table definitions, from wowdev/WoWDBDefs on GitHub.
 
-Not yet tested: Edge, Windows, other browsers, and any other WoW product.
+Not yet tested: Edge, Windows, other browsers, and any other WoW product. Encrypted data with published keys is not decrypted yet (this build has none).
 
 Chrome's newer folder picker (`showDirectoryPicker`) is not used: it refuses anything inside `/Applications` or `Program Files`, which is where the game installs. The cost is that the page cannot remember the folder between visits.
 
@@ -31,7 +32,7 @@ Tests that need a game install look for it at `WOW_DIR` (default `/Applications/
 
 ## Credits
 
-The CASC, BLTE and root-file reading follows [wow.export](https://github.com/Kruithne/wow.export) (MIT, Kruithne and Marlamin) and [wowdev.wiki](https://wowdev.wiki).
+The CASC, BLTE, root-file and database-table reading follows [wow.export](https://github.com/Kruithne/wow.export) (MIT, Kruithne and Marlamin) and [wowdev.wiki](https://wowdev.wiki). Table definitions come from [WoWDBDefs](https://github.com/wowdev/WoWDBDefs) at run time.
 
 ## Licence
 
