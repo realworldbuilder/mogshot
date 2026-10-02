@@ -85,6 +85,9 @@ interface Element {
 }
 
 const OPTION_HIDDEN = 0x20;
+/** The model texture slot of the body skin. */
+const SLOT_SKIN = 1;
+const BLEND_ALPHA = 15;
 const REQ_PLAYER = 0x1;
 /** Bit of an ordinary class (warrior). A choice that excludes it is for special classes only. */
 const CLASS_ORDINARY = 0x1;
@@ -269,6 +272,28 @@ export class Appearance {
       if (choice) chosen.set(option.id, choice.id);
     }
     return chosen;
+  }
+
+  /**
+   * A layer that paints a texture onto one section of the body texture (an armour piece).
+   * Undefined if the model's layout has no such section.
+   */
+  bodyLayer(model: CharacterModel, section: number, fileId: number, order: number): TextureLayer | undefined {
+    const size = this.slotSizes.get(`${model.layoutId}:${SLOT_SKIN}`);
+    const row = (this.sectionsByLayout.get(model.layoutId) ?? []).find((r) => n(r.SectionType) === section);
+    if (!size || !row) return undefined;
+    return {
+      textureType: SLOT_SKIN,
+      layer: order,
+      blendMode: BLEND_ALPHA,
+      fileId,
+      canvasWidth: size.width,
+      canvasHeight: size.height,
+      x: n(row.X),
+      y: n(row.Y),
+      width: n(row.Width),
+      height: n(row.Height),
+    };
   }
 
   /** What a set of choices (option ID -> choice ID) does to the model. */
