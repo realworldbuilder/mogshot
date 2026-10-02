@@ -196,6 +196,12 @@ export function readTable(bytes: Uint8Array, fields: readonly DbdField[], option
     }
   }
 
+  const idField = fields.find((field) => field.isId);
+  if (!idField) throw new Error('Table definition has no ID field');
+  const idColumn = idField.name;
+  // A table with no rows can also store no field descriptions.
+  if (header.recordCount === 0 && storages.length === 0) return { rows: [], idColumn, skipped: [] };
+
   // Match definition fields to stored fields.
   const inlineFields = fields.filter((field) => !field.nonInline);
   if (inlineFields.length !== storages.length) {
@@ -203,9 +209,6 @@ export function readTable(bytes: Uint8Array, fields: readonly DbdField[], option
       `Table definition does not match the file: ${inlineFields.length} fields defined, ${storages.length} stored`,
     );
   }
-  const idField = fields.find((field) => field.isId);
-  if (!idField) throw new Error('Table definition has no ID field');
-  const idColumn = idField.name;
   if (options.columns) {
     for (const name of options.columns) {
       if (!fields.some((field) => field.name === name)) throw new Error(`Table has no column ${name}`);
