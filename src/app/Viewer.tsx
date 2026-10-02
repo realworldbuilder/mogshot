@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Option } from '../character/appearance';
+import type { ItemSummary, Slot } from '../character/equipment';
 import { encodePng, unpremultiply } from '../render/export';
 import { CharacterRenderer, DEFAULT_CAMERA } from '../render/renderer';
 import type { Race } from '../worker/api';
 import type { DataClient } from '../worker/client';
 import { messageOf } from './App';
+import { GearPanel } from './GearPanel';
 
 /** Longer side of the exported picture, in pixels. */
 const EXPORT_LONG_SIDE = 3840;
@@ -18,6 +20,8 @@ interface Character {
 
 /** What is drawn at the moment, as returned by the worker. */
 interface Shown {
+  /** Counts the pictures drawn, so a change on screen can be told from the one before. */
+  drawn: number;
   options: Option[];
   choices: Map<number, number>;
   problems: string[];
@@ -31,6 +35,8 @@ export function Viewer({ data }: { data: DataClient }) {
 
   const [races, setRaces] = useState<Race[]>();
   const [character, setCharacter] = useState<Character>();
+  // What is worn stays on when the race or sex changes.
+  const [gear, setGear] = useState<ReadonlyMap<Slot, ItemSummary>>(new Map());
   const [shown, setShown] = useState<Shown>();
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<string>();
@@ -57,13 +63,19 @@ export function Viewer({ data }: { data: DataClient }) {
     const id = ++request.current;
     setBuilding(true);
     data
-      .character(character.raceId, character.sex, character.choices)
+      .character(
+        character.raceId,
+        character.sex,
+        character.choices,
+        [...gear].map(([slot, item]) => [slot, item.id]),
+      )
       .then((built) => {
         if (id !== request.current || !canvas.current) return;
         renderer.current ??= new CharacterRenderer(canvas.current);
         renderer.current.setScene(built.scene);
         renderer.current.render();
         setShown({
+          drawn: id,
           options: built.scene.options,
           choices: new Map(built.scene.choices),
           problems: [...built.scene.problems, ...renderer.current.problems],
@@ -77,7 +89,7 @@ export function Viewer({ data }: { data: DataClient }) {
       .finally(() => {
         if (id === request.current) setBuilding(false);
       });
-  }, [data, character]);
+  }, [data, character, gear]);
 
   const race = races?.find((r) => r.id === character?.raceId);
 
@@ -131,7 +143,14 @@ export function Viewer({ data }: { data: DataClient }) {
         <div class="viewer">
           <div>
             <div class="stage">
-              <canvas id="canvas" ref={canvas} width={960} height={1280} class={building ? 'building' : ''} />
+              <canvas
+                id="canvas"
+                ref={canvas}
+                width={960}
+                height={1280}
+                class={building ? 'building' : ''}
+                data-drawn={shown?.drawn ?? 0}
+              />
             </div>
             <div class="actions">
               <button class="primary" id="download" disabled={exporting || !shown} onClick={download}>
@@ -145,9 +164,20 @@ export function Viewer({ data }: { data: DataClient }) {
             <p class={`${exportNote?.bad ? 'bad' : 'dim'} small`} id="export-note">
               {exportNote?.text ?? 'A transparent PNG, 3840 pixels on its longer side. The grey squares are transparency.'}
             </p>
+            {shown && shown.problems.length > 0 && (
+              <div id="character-problems">
+                <p class="bad small">This picture is missing something. A download will be missing it too:</p>
+                <ul class="small">
+                  {shown.problems.map((problem) => (
+                    <li>{problem}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           <div class="controls">
+            <span class="column-title">Character</span>
             <label class="field">
               <span>Race</span>
               <select
@@ -199,21 +229,25 @@ export function Viewer({ data }: { data: DataClient }) {
               );
             })}
 
-            {shown && shown.problems.length > 0 && (
-              <div id="character-problems">
-                <p class="bad small">Missing from this picture:</p>
-                <ul class="small">
-                  {shown.problems.map((problem) => (
-                    <li>{problem}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
             {shown && (
               <p class="dim small" id="character-note">
                 Built in {(shown.ms / 1000).toFixed(1)} s.
               </p>
             )}
+          </div>
+
+          <div class="controls">
+            <span class="column-title">Gear</span>
+            <GearPanel
+              data={data}
+              gear={gear}
+              onChange={(slot, item) => {
+                const next = new Map(gear);
+                if (item) next.set(slot, item);
+                else next.delete(slot);
+                setGear(next);
+              }}
+            />
           </div>
         </div>
       )}

@@ -18,7 +18,7 @@ body {
 }
 
 main {
-  max-width: 980px;
+  max-width: 1120px;
   margin: 0 auto;
   padding: 48px 16px 32px;
 }
@@ -160,12 +160,12 @@ ul {
 
 .viewer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: minmax(0, 1fr) 210px 270px;
   gap: 24px;
   align-items: start;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .viewer {
     grid-template-columns: 1fr;
   }
@@ -222,4 +222,113 @@ select {
 
 .panel.over {
   border-color: var(--accent);
+}
+
+.column-title {
+  font-weight: 600;
+}
+
+.gear {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.slot-row {
+  display: flex;
+  gap: 4px;
+}
+
+.slot-pick,
+.results button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.slot-pick[aria-expanded='true'] {
+  border-color: var(--accent);
+}
+
+.slot-clear {
+  width: 30px;
+  font: inherit;
+  color: var(--dim);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 4px;
+}
+
+.icon.empty {
+  display: inline-block;
+  border: 1px dashed var(--line);
+}
+
+.slot-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.slot-name {
+  font-size: 0.72rem;
+  color: var(--dim);
+}
+
+.item-name,
+.results button span {
+  overflow: hidden;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.search {
+  margin: 4px 0 8px;
+}
+
+.search input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+}
+
+.results {
+  max-height: 260px;
+  margin: 4px 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.results li + li {
+  margin-top: 2px;
+}
+
+.result-count {
+  margin: 0;
 }
