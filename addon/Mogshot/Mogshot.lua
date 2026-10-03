@@ -59,27 +59,40 @@ local function captureLook(entry)
 	return count
 end
 
-local function capture()
+-- `undressing` says the player just changed what they wear, so finding nothing worn is real.
+-- At other moments (a loading screen, logging out) the game may report nothing worn; what
+-- was captured before is kept then.
+local function capture(undressing)
 	local entry = record()
 	if not entry then return end
 	local _, raceFile, raceId = UnitRace("player")
 	local _, classFile, classId = UnitClass("player")
 	entry.v = VERSION
-	entry.t = time()
+	entry.t = entry.t or time()
 	entry.race = raceFile
 	entry.raceId = raceId
 	entry.sex = UnitSex("player") -- 2 male, 3 female
 	entry.class = classFile
 	entry.classId = classId
-	local gear, items = {}, 0
+	-- The game files have no name for many items (the server supplies them), so pass them along.
+	local gear, named, items = {}, {}, 0
 	for _, slot in ipairs(SLOTS) do
 		local id = GetInventoryItemID("player", slot[2])
 		if id and id > 0 then
 			gear[slot[1]] = id
 			items = items + 1
+			local name, _, quality
+			if GetItemInfo then name, _, quality = GetItemInfo(id) end
+			if not name and C_Item and C_Item.GetItemNameByID then name = C_Item.GetItemNameByID(id) end
+			if not quality and C_Item and C_Item.GetItemQualityByID then quality = C_Item.GetItemQualityByID(id) end
+			if name then named[id] = { name = name, quality = quality or 1 } end
 		end
 	end
-	entry.gear = gear
+	if items > 0 or undressing or not entry.gear then
+		entry.gear = gear
+		entry.items = named
+		entry.t = time()
+	end
 	return entry, items
 end
 
@@ -94,9 +107,20 @@ local function code(entry)
 	for option in pairs(entry.choices or {}) do options[#options + 1] = option end
 	table.sort(options)
 	for _, option in ipairs(options) do choices[#choices + 1] = option .. ":" .. entry.choices[option] end
+	-- Names are percent-encoded so no separator can appear in one.
+	local names = {}
+	for _, slot in ipairs(SLOTS) do
+		local id = entry.gear and entry.gear[slot[1]]
+		local item = id and entry.items and entry.items[id]
+		if item then
+			local safe = item.name:gsub("[^%w]", function(c) return ("%%%02X"):format(c:byte()) end)
+			names[#names + 1] = id .. ":" .. (item.quality or 1) .. ":" .. safe
+		end
+	end
 	local fields = {
 		"MOG1", key() or "", entry.race or "", entry.raceId or "", (entry.sex or 2) - 2,
 		entry.classId or "", entry.class or "", entry.t or "", table.concat(gear, ","), table.concat(choices, ","),
+		table.concat(names, ","),
 	}
 	return (table.concat(fields, ";"):gsub("|", ""))
 end
@@ -146,7 +170,6 @@ end
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
-frame:RegisterEvent("PLAYER_LOGOUT")
 if C_BarberShop then
 	frame:RegisterEvent("BARBER_SHOP_OPEN")
 	frame:RegisterEvent("BARBER_SHOP_APPEARANCE_APPLIED")
@@ -160,7 +183,7 @@ frame:SetScript("OnEvent", function(_, event)
 		pending = true
 		C_Timer.After(1, function()
 			pending = false
-			pcall(capture)
+			pcall(capture, true)
 		end)
 	elseif event == "BARBER_SHOP_OPEN" or event == "BARBER_SHOP_APPEARANCE_APPLIED" then
 		C_Timer.After(0.5, function()
