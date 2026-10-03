@@ -9,6 +9,7 @@ import type {
   ItemSummary,
   IconResult,
   ItemSearchResult,
+  LoadingScreen,
   OpenResult,
   PoseRequest,
   PoseResult,
@@ -98,8 +99,14 @@ export class DataClient {
     return this.call({ method: 'randomOutfit', minQuality });
   }
 
+  /** An icon's or a loading screen's pixels. */
   icon(fileId: number): Promise<IconResult> {
     return this.call({ method: 'icon', fileId });
+  }
+
+  /** The game's loading screens, by name. */
+  backdrops(): Promise<LoadingScreen[]> {
+    return this.call({ method: 'backdrops' });
   }
 
   /** A captured character as the game data of the open folder has it. */

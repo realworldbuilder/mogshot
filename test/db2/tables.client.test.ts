@@ -7,7 +7,7 @@ import { cachedFetch } from '../cached-fetch';
 import { parseCsv } from '../csv';
 import { hasClient, NodeSource, WOW_DIR } from '../node-source';
 
-/** Every table the character and gear pipeline reads. */
+/** Every table the character, gear and backdrop pipeline reads. */
 const TABLES = [
   'ChrRaces',
   'ChrRaceXChrModel',
@@ -46,6 +46,8 @@ const TABLES = [
   'HelmetGeosetData',
   'ItemSet',
   'AnimationData',
+  'LoadingScreens',
+  'Map',
 ];
 
 /**

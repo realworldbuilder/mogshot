@@ -2,6 +2,7 @@
 import { IndexedDbCache } from '../casc/cache';
 import { CascStorage, InstallError, listProducts } from '../casc/storage';
 import { Appearance } from '../character/appearance';
+import { type LoadingScreen, loadLoadingScreens } from '../character/backdrops';
 import { Equipment } from '../character/equipment';
 import { buildCharacterScene, type CharacterRig } from '../character/scene';
 import { Database } from '../db2/database';
@@ -15,6 +16,7 @@ let storage: CascStorage | undefined;
 let database: Database | undefined;
 let appearance: Promise<Appearance> | undefined;
 let equipment: Promise<Equipment> | undefined;
+let screens: Promise<LoadingScreen[]> | undefined;
 // The character last built, kept so it can be posed again without rebuilding.
 let rig: CharacterRig | undefined;
 
@@ -66,6 +68,7 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       database = new Database(storage, definitions);
       appearance = undefined;
       equipment = undefined;
+      screens = undefined;
       rig = undefined;
       const value: OpenResult = {
         info: storage.info,
@@ -118,6 +121,18 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
     case 'resolveImport': {
       const [looks, items] = await Promise.all([loadAppearance(), loadEquipment()]);
       return { value: resolveImport(request.record, looks, items) };
+    }
+    case 'backdrops': {
+      if (!database || !storage) throw new Error('No folder is open');
+      // Only screens whose picture this install has: a build lists screens for content it does not ship.
+      const files = storage.files;
+      screens ??= loadLoadingScreens(database).then((list) => list.filter((screen) => files.find(screen.fileId) !== undefined));
+      try {
+        return { value: await screens };
+      } catch (error) {
+        screens = undefined;
+        throw error;
+      }
     }
     case 'icon': {
       if (!storage) throw new Error('No folder is open');
