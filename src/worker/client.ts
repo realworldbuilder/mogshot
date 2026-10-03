@@ -1,3 +1,4 @@
+import type { PlaceScene } from '../world/place';
 import type { OpenStage } from '../casc/storage';
 import type { PickedFile } from '../io/file-list-source';
 import type {
@@ -102,6 +103,11 @@ export class DataClient {
   /** An icon's or a loading screen's pixels. */
   icon(fileId: number): Promise<IconResult> {
     return this.call({ method: 'icon', fileId });
+  }
+
+  /** The game world around a spot, for the character to stand in. `facing` is in radians. */
+  place(map: number, x: number, y: number, facing: number, reach: number): Promise<PlaceScene> {
+    return this.call({ method: 'place', map, x, y, facing, reach });
   }
 
   /** The game's loading screens, by name. */

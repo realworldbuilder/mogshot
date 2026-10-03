@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { buildPlace } from '../world/place';
 import { IndexedDbCache } from '../casc/cache';
 import { CascStorage, InstallError, listProducts } from '../casc/storage';
 import { Appearance } from '../character/appearance';
@@ -121,6 +122,17 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
     case 'resolveImport': {
       const [looks, items] = await Promise.all([loadAppearance(), loadEquipment()]);
       return { value: resolveImport(request.record, looks, items) };
+    }
+    case 'place': {
+      if (!database || !storage) throw new Error('No folder is open');
+      const maps = await database.table('Map', ['WdtFileDataID']);
+      const wdtFileId = Number(maps.rows.find((row) => Number(row.ID) === request.map)?.WdtFileDataID ?? 0);
+      if (!wdtFileId) throw new Error(`Map ${request.map} has no outdoor world in this build`);
+      const value = await buildPlace(storage, { wdtFileId, x: request.x, y: request.y, facing: request.facing, reach: request.reach });
+      const buffers = new Set<ArrayBufferLike>();
+      for (const mesh of [...value.meshes, ...value.terrain, ...value.props]) buffers.add(mesh.vertices.buffer).add(mesh.indices.buffer);
+      for (const image of [...value.textures, ...value.propTextures, ...value.terrain.map((mesh) => mesh.blend)]) buffers.add(image.pixels.buffer);
+      return { value, transfer: [...buffers] as Transferable[] };
     }
     case 'backdrops': {
       if (!database || !storage) throw new Error('No folder is open');

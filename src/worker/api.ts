@@ -37,6 +37,7 @@ export type Request =
   | { id: number; method: 'randomOutfit'; minQuality: number }
   | { id: number; method: 'icon'; fileId: number }
   | { id: number; method: 'backdrops' }
+  | { id: number; method: 'place'; map: number; x: number; y: number; facing: number; reach: number }
   | { id: number; method: 'resolveImport'; record: ImportedRecord };
 
 export interface ItemSearchResult {

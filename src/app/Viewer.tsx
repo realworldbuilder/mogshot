@@ -15,9 +15,12 @@ import { messageOf } from './App';
 import { BackdropControls, backdropName, compose, drawable, type LoadScreen, screenProblem, useScreen } from './BackdropControls';
 import { GearPanel } from './GearPanel';
 import { ImportPanel } from './ImportPanel';
+import { type PlaceChoice, PlaceControls, recallPlace, rememberPlace } from './PlaceControls';
 import { downloadFile, downloadPng, previewSize, savedNote, type Size, SIZES } from './sizes';
 
 const SEX_NAMES = ['Male', 'Female'];
+/** How many yards of world are drawn around the character. */
+const PLACE_REACH = 450;
 
 interface Character {
   raceId: number;
@@ -131,6 +134,10 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
   const [exportNote, setExportNote] = useState<{ text: string; bad: boolean }>();
   const [exporting, setExporting] = useState(false);
   const [playing, setPlaying] = useState(false);
+  // The place in the game world the character stands in, and whether it is on screen yet.
+  const [place, setPlace] = useState<PlaceChoice | undefined>(recallPlace);
+  const [placed, setPlaced] = useState<{ state: 'none' | 'reading' | 'shown'; problem?: string }>({ state: 'none' });
+  const placeRequest = useRef(0);
   const [clipFormat, setClipFormat] = useState<ClipFormat>('mp4');
   // The backdrop as drawn behind the preview, kept to give a renderer created later.
   const backdropSource = useRef<ReturnType<typeof compose>>(undefined);
@@ -240,6 +247,42 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
     renderer.current?.setBackdrop(backdropSource.current);
     redraw();
   }, [backdrop, preview.width, preview.height, screen.state, screen.image, screens]);
+
+  // Read the place whenever the spot or the facing changes. The blur alone does not need it read again.
+  useEffect(() => {
+    rememberPlace(place);
+    const id = ++placeRequest.current;
+    // Nothing to stand in a place until the first character is drawn.
+    if (!renderer.current) return;
+    if (!place) {
+      renderer.current?.setPlace(undefined);
+      setPlaced({ state: 'none' });
+      redraw();
+      return;
+    }
+    setPlaced({ state: 'reading' });
+    data
+      .place(place.map, place.x, place.y, (place.facing * Math.PI) / 180, PLACE_REACH)
+      .then((scene) => {
+        if (id !== placeRequest.current || !renderer.current) return;
+        renderer.current.setPlace(scene);
+        const problems = [...scene.problems, ...renderer.current.placeProblems];
+        setPlaced({ state: 'shown', problem: problems.length > 0 ? problems.join('. ') : undefined });
+        redraw();
+      })
+      .catch((cause) => {
+        if (id !== placeRequest.current) return;
+        renderer.current?.setPlace(undefined);
+        setPlaced({ state: 'none', problem: `The place could not be read: ${messageOf(cause)}` });
+        redraw();
+      });
+  }, [data, place?.map, place?.x, place?.y, place?.facing, shown === undefined]);
+  useEffect(() => {
+    renderer.current?.setFocus(place?.blur ?? 0.5);
+    redraw();
+  }, [place?.blur]);
+  /** The picture is filled edge to edge: by a backdrop, or by a place. */
+  const inPlace = placed.state === 'shown';
 
   // Camera: drag to turn, shift-drag (or right-drag) to slide, wheel to zoom.
   useEffect(() => {
@@ -399,7 +442,7 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
       const image = view.renderImage(camera.current, {
         longSide: Math.max(size.width, size.height),
         aspect: size.tight && !hasBackdrop ? preview.width / preview.height : size.width / size.height,
-        tight: size.tight && !hasBackdrop,
+        tight: size.tight && !hasBackdrop && !inPlace,
       });
       unpremultiply(image.pixels);
       return { image, png: await encodePng(image) };
@@ -460,7 +503,7 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
         text:
           `Saved ${times.length} frames, ${(pose.duration / 1000).toFixed(1)} s at ${fps} a second, ${width} × ${height} ` +
           `(${(bytes.length / 1024 / 1024).toFixed(1)} MB) in ${((performance.now() - start) / 1000).toFixed(1)} s.` +
-          (clipFormat !== 'frames' && !hasBackdrop ? ' With no backdrop the background is black; PNG frames keep it transparent.' : ''),
+          (clipFormat !== 'frames' && !hasBackdrop && !inPlace ? ' With no backdrop the background is black; PNG frames keep it transparent.' : ''),
       });
     } catch (cause) {
       setExportNote({ bad: true, text: `The clip could not be exported: ${messageOf(cause)}` });
@@ -523,11 +566,12 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
                 data-drawn={shown?.drawn ?? 0}
                 data-pose={pose ? `${pose.sequence}:${pose.time}` : ''}
                 data-backdrop={hasBackdrop ? backdropName(backdrop, screens) : ''}
+                data-place={placed.state}
               />
             </div>
             <p class="dim small hint">
               Drag to turn, shift-drag to slide, scroll to zoom.{' '}
-              {hasBackdrop ? 'The backdrop is part of the picture.' : 'The grey squares are transparency.'}
+              {inPlace ? 'The place is part of the picture.' : hasBackdrop ? 'The backdrop is part of the picture.' : 'The grey squares are transparency.'}
             </p>
 
             <div class="pose" id="pose">
@@ -612,6 +656,8 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
                 </button>
               </div>
             </div>
+
+            <PlaceControls place={place} onChange={setPlace} busy={placed.state === 'reading'} problem={placed.problem} />
 
             {active && (
               <BackdropControls backdrop={backdrop} onChange={onBackdrop} screens={screens} problem={screenProblem(backdrop, screen, screens)} />

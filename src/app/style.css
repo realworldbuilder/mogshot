@@ -515,3 +515,15 @@ select {
   background: #14161ad9;
   border-radius: 8px;
 }
+
+.scrub input[type='text'] {
+  flex: 1;
+  min-width: 120px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 0.875rem;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}

@@ -389,6 +389,40 @@ test('plays an animation and saves it as a clip', async ({ page }) => {
   expect(await problemsShown(page)).toEqual([]);
 });
 
+test('stands the character in a place in the game world', async ({ page }) => {
+  await load(page, false);
+  await openAndDraw(page);
+  await page.locator('#size').selectOption('youtube');
+  const canvas = page.locator('#canvas');
+  const alone = await canvas.screenshot();
+
+  await page.locator('#place-spot').selectOption({ label: 'Elwynn Forest, near Goldshire' });
+  await expect(canvas).toHaveAttribute('data-place', 'shown', { timeout: 60_000 });
+  await expect(page.locator('#place-note')).toHaveCount(0);
+  const there = await canvas.screenshot({ path: 'test-results/place.png' });
+  expect(there.equals(alone)).toBe(false);
+
+  // The picture is the whole frame, filled: no transparency at its corners.
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#download').click()]);
+  await download.saveAs('test-results/place-download.png');
+  const image = decodePng(readFileSync('test-results/place-download.png'));
+  expect([image.width, image.height]).toEqual([1280, 720]);
+  for (const corner of [0, image.width - 1, (image.height - 1) * image.width, image.height * image.width - 1]) expect(image.pixels[corner * 4 + 3]).toBe(255);
+
+  // A line from the addon moves the spot; the place is remembered for the next visit.
+  await page.locator('#place-paste').fill('Mogshot: spot 0 -8833.0 628.0 215  (paste this line into Place on the page)');
+  await expect(page.locator('#place-spot')).toHaveValue('0');
+  await expect(canvas).toHaveAttribute('data-place', 'shown', { timeout: 60_000 });
+  await page.reload();
+  await openAndDraw(page);
+  await expect(canvas).toHaveAttribute('data-place', 'shown', { timeout: 60_000 });
+  await canvas.screenshot({ path: 'test-results/place-stormwind.png' });
+
+  await page.locator('#place-spot').selectOption('none');
+  await expect(canvas).toHaveAttribute('data-place', 'none');
+  expect(await problemsShown(page)).toEqual([]);
+});
+
 test('turns, zooms and resets the camera', async ({ page }) => {
   await load(page, false);
   await openAndDraw(page);
