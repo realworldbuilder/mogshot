@@ -125,46 +125,64 @@ local function code(entry)
 	return (table.concat(fields, ";"):gsub("|", ""))
 end
 
--- A box with the code selected, ready for Cmd+C or Ctrl+C.
+-- A box in the middle of the screen with the code selected, ready for Cmd+C or Ctrl+C.
 local copyFrame, copyBox
-local function showCode(text)
-	if not copyFrame then
-		copyFrame = CreateFrame("Frame", "MogshotCopy", UIParent, "BackdropTemplate")
-		copyFrame:SetSize(520, 110)
-		copyFrame:SetPoint("CENTER")
-		copyFrame:SetFrameStrata("FULLSCREEN_DIALOG")
-		copyFrame:SetMovable(true)
-		copyFrame:EnableMouse(true)
-		copyFrame:RegisterForDrag("LeftButton")
-		copyFrame:SetScript("OnDragStart", copyFrame.StartMoving)
-		copyFrame:SetScript("OnDragStop", copyFrame.StopMovingOrSizing)
-		copyFrame:SetBackdrop({
+local function buildCopyBox()
+	-- Older clients have no backdrop template; the box works without the border.
+	local template = BackdropTemplateMixin and "BackdropTemplate" or nil
+	local f = CreateFrame("Frame", "MogshotCopy", UIParent, template)
+	f:SetSize(540, 86)
+	f:SetPoint("CENTER", 0, 120)
+	f:SetFrameStrata("FULLSCREEN_DIALOG")
+	f:SetMovable(true)
+	f:EnableMouse(true)
+	f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", f.StartMoving)
+	f:SetScript("OnDragStop", f.StopMovingOrSizing)
+	if f.SetBackdrop then
+		f:SetBackdrop({
 			bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
 			edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
 			tile = true, tileSize = 16, edgeSize = 16,
 			insets = { left = 4, right = 4, top = 4, bottom = 4 },
 		})
-		copyFrame:SetBackdropColor(0.05, 0.05, 0.07, 0.97)
-		tinsert(UISpecialFrames, "MogshotCopy")
-		local title = copyFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-		title:SetPoint("TOPLEFT", 14, -12)
-		local copyKey = (IsMacClient and IsMacClient()) and "Cmd+C" or "Ctrl+C"
-		title:SetText("Your Mogshot code is selected: press " .. copyKey .. ", then Esc. Paste it into the page.")
-		local close = CreateFrame("Button", nil, copyFrame, "UIPanelCloseButton")
-		close:SetPoint("TOPRIGHT", -4, -4)
-		copyBox = CreateFrame("EditBox", "MogshotCopyBox", copyFrame)
-		copyBox:SetMultiLine(true)
-		copyBox:SetAutoFocus(false)
-		copyBox:SetFontObject(ChatFontNormal)
-		copyBox:SetMaxLetters(0)
-		copyBox:SetPoint("TOPLEFT", 14, -36)
-		copyBox:SetPoint("BOTTOMRIGHT", -14, 12)
-		copyBox:SetScript("OnEscapePressed", function() copyFrame:Hide() end)
+		f:SetBackdropColor(0.05, 0.05, 0.07, 0.97)
+	else
+		local bg = f:CreateTexture(nil, "BACKGROUND")
+		bg:SetAllPoints()
+		bg:SetColorTexture(0.05, 0.05, 0.07, 0.97)
+	end
+	tinsert(UISpecialFrames, "MogshotCopy")
+	local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	title:SetPoint("TOPLEFT", 14, -12)
+	local copyKey = (IsMacClient and IsMacClient()) and "Cmd+C" or "Ctrl+C"
+	title:SetText("Mogshot code, selected: press " .. copyKey .. ", then Esc. Paste it into the page.")
+	local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+	close:SetPoint("TOPRIGHT", -2, -2)
+	-- One line: the whole code is selected even where it runs past the edge.
+	local box = CreateFrame("EditBox", "MogshotCopyBox", f)
+	box:SetAutoFocus(false)
+	box:SetFontObject(ChatFontNormal)
+	box:SetMaxLetters(0)
+	box:SetSize(510, 24)
+	box:SetPoint("BOTTOMLEFT", 14, 14)
+	box:SetScript("OnEscapePressed", function() f:Hide() end)
+	box:SetScript("OnEnterPressed", function() f:Hide() end)
+	copyFrame, copyBox = f, box
+end
+
+-- True if the box is on screen with the code in it.
+local function showCode(text)
+	if not copyFrame then
+		local ok = pcall(buildCopyBox)
+		if not ok or not copyBox then copyFrame, copyBox = nil, nil return false end
 	end
 	copyBox:SetText(text)
+	copyBox:SetCursorPosition(0)
 	copyFrame:Show()
 	copyBox:SetFocus()
 	copyBox:HighlightText()
+	return true
 end
 
 local frame = CreateFrame("Frame")
@@ -204,7 +222,18 @@ SlashCmdList["MOGSHOT"] = function()
 	end
 	local looks = 0
 	for _ in pairs(entry.choices or {}) do looks = looks + 1 end
-	say(("captured %s: %d items, %d appearance choices%s. The file is saved on /reload or logout; the code below works now."):format(
+	say(("captured %s: %d items, %d appearance choices%s."):format(
 		key() or "?", items, looks, looks == 0 and " (open a barber to capture the look)" or ""))
-	showCode(code(entry))
+	local text = code(entry)
+	if showCode(text) then
+		say("the code is in the box in the middle of the screen. Copy it and paste it into the page. Or /reload and give the page the folder again.")
+	elseif ChatFrame_OpenChat then
+		-- The box could not be made on this client: the chat line can be copied too.
+		ChatFrame_OpenChat(text)
+		say("the code is in the chat line, selected. Copy it, clear the line, and paste it into the page.")
+		local edit = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
+		if edit and edit.HighlightText then edit:HighlightText() end
+	else
+		say("the code could not be shown. /reload and give the page the folder again.")
+	end
 end
