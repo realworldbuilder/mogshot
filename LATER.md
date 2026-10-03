@@ -11,7 +11,7 @@ Ideas that are not the one job (folder → character → pose → transparent PN
 - A command-line interface
 - 3D export
 - Creature and mount browser
-- Import a real character from the armory or an addon
+- Import from the armory (the addon import is built)
 - User accounts
 - Safari and Firefox support
 - Particle and ribbon effects on items

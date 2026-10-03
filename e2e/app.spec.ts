@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { globSync, readFileSync } from 'node:fs';
 import { hasClient, WOW_DIR } from '../test/node-source';
 import { writePng } from '../test/png';
 import { decodePng, over } from '../test/png-decode';
@@ -500,4 +500,52 @@ test('random look, random epics, and the best set for a class', async ({ page })
 
   await redraw(page, () => page.locator('#clear-gear').click());
   await expect(page.locator('[data-slot="chest"] .item-name')).toHaveText('Empty');
+});
+
+/** A warrior orc female wearing Lionheart Helm and Thunderfury, as the addon would encode her. */
+const ORC_CODE = 'MOG1;Thrall-Whitemane;Orc;2;1;1;WARRIOR;;head:12640,mainHand:19019;';
+
+test('imports a character from a pasted code and keeps the look given to her', async ({ page }) => {
+  await load(page, false);
+  await openAndDraw(page);
+  await page.locator('#paste-toggle').click();
+  await redraw(page, () => page.locator('#import-code').fill(ORC_CODE));
+  await expect(page.locator('#race option:checked')).toHaveText('Orc');
+  await expect(page.locator('#sex button.on')).toHaveText('Female');
+  await expect(page.locator('#class option:checked')).toHaveText('Warrior');
+  await expect(page.locator('[data-slot="head"] .item-name')).toHaveText('Lionheart Helm');
+  await expect(page.locator('[data-slot="mainHand"] .item-name')).toHaveText('Thunderfury, Blessed Blade of the Windseeker');
+  await expect(page.locator('#import-note')).toContainText('2 of 2 items found');
+  await expect(page.locator('#import-note')).toContainText('look not captured');
+  expect(await problemsShown(page)).toEqual([]);
+  await page.locator('#canvas').screenshot({ path: 'test-results/imported.png' });
+  await page.screenshot({ path: 'test-results/page-imported.png', fullPage: true });
+
+  // The look is set by eye, and a second import of the same character keeps it.
+  const hair = page.locator('select[data-option="Hair Style"]');
+  await redraw(page, () => hair.selectOption({ index: 3 }));
+  const chosen = await hair.locator('option:checked').textContent();
+  await page.locator('#import-code').fill('');
+  await redraw(page, () => page.locator('#import-code').fill(ORC_CODE));
+  await expect(hair.locator('option:checked')).toHaveText(chosen!);
+  // Choosing a race by hand means the character is no longer the imported one.
+  await redraw(page, () => page.locator('#race').selectOption({ label: 'Human' }));
+  await expect(page.locator('#imported')).toHaveValue('');
+
+  await page.locator('#import-code').fill('nonsense');
+  await expect(page.locator('#import-note')).toContainText('not a Mogshot code');
+});
+
+test('lists the characters the addon captured in the game folder', async ({ page }) => {
+  const saved = globSync(`${WOW_DIR}/_*_/WTF/Account/*/SavedVariables/Mogshot.lua`);
+  test.skip(saved.length === 0, 'the Mogshot addon has not saved any character here');
+  await load(page, false);
+  await openAndDraw(page);
+  const options = page.locator('#imported option');
+  expect(await options.count()).toBeGreaterThan(1);
+  const first = await options.nth(1).getAttribute('value');
+  console.log('captured characters:', await options.allTextContents());
+  await redraw(page, () => page.locator('#imported').selectOption(first!));
+  await expect(page.locator('#import-note')).toContainText('items found');
+  await expect(page.locator('#imported')).toHaveValue(first!);
 });
