@@ -90,6 +90,8 @@ export class CharacterRenderer {
   private textures: WebGLTexture[] = [];
   private draws: PreparedDraw[] = [];
   private bounds: CharacterScene['bounds'] = { min: [0, 0, 0], max: [0, 0, 0] };
+  /** The box the camera frames while a clip plays, in place of each pose's own. */
+  private framing: CharacterScene['bounds'] | undefined;
   /** Problems found while preparing the scene for drawing (unknown shaders and the like). */
   problems: string[] = [];
 
@@ -111,6 +113,7 @@ export class CharacterRenderer {
     const { gl } = this;
     this.problems = [];
     this.bounds = scene.bounds;
+    this.framing = undefined;
 
     for (const mesh of this.meshes) {
       gl.deleteVertexArray(mesh.vao);
@@ -224,6 +227,14 @@ export class CharacterRenderer {
       gl.bindTexture(gl.TEXTURE_2D, mesh.boneTexture);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 4, mesh.bones.length / 16, gl.RGBA, gl.FLOAT, mesh.bones);
     });
+  }
+
+  /**
+   * Keep the camera framed on one box while the pose changes, so a playing animation does
+   * not make the view breathe with it. Without a box, each pose is framed on its own again.
+   */
+  holdFraming(bounds: CharacterScene['bounds'] | undefined): void {
+    this.framing = bounds;
   }
 
   /** Draw the scene to the canvas. The canvas's pixel size is used as it is. */
@@ -490,7 +501,7 @@ export class CharacterRenderer {
   }
 
   private cameraMatrices(camera: Camera, aspect: number) {
-    const { min, max } = this.bounds;
+    const { min, max } = this.framing ?? this.bounds;
     const center: [number, number, number] = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
     // The character faces +X; yaw 0 puts the camera in front of it. Z is up.
     const toCamera = [

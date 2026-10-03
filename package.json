@@ -24,6 +24,8 @@
   },
   "dependencies": {
     "fflate": "^0.8.3",
+    "gifenc": "^1.0.3",
+    "mp4-muxer": "^5.2.2",
     "preact": "^11.0.0"
   }
 }
