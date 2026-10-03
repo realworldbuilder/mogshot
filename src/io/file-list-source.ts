@@ -7,6 +7,12 @@ export interface PickedFile {
 }
 
 /**
+ * The Mogshot addon's saved variables: one file per account under each product's WTF folder
+ * (`_classic_beta_/WTF/Account/<account>/SavedVariables/Mogshot.lua`).
+ */
+export const ADDON_FILE = /^_[a-z_]+_\/wtf\/account\/[^/]+\/savedvariables\/mogshot\.lua$/i;
+
+/**
  * Files from `<input type="file" webkitdirectory>`. `webkitRelativePath` starts with the
  * folder's own name, which is dropped. Only the files Mogshot reads are kept, so a folder
  * with tens of thousands of addon files stays cheap to hand to the worker.
@@ -15,7 +21,7 @@ export function pickedFiles(files: Iterable<File>): PickedFile[] {
   const picked: PickedFile[] = [];
   for (const file of files) {
     const path = file.webkitRelativePath.split('/').slice(1).join('/');
-    if (path === '.build.info' || /^data\/(data|config)\//i.test(path)) picked.push({ path, file });
+    if (path === '.build.info' || /^data\/(data|config)\//i.test(path) || ADDON_FILE.test(path)) picked.push({ path, file });
   }
   return picked;
 }

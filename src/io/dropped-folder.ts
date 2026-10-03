@@ -38,7 +38,8 @@ function fileOf(entry: FileSystemEntry): Promise<File> {
 
 /**
  * Collect the files Mogshot reads from a dropped WoW folder: `.build.info`, the build
- * configs it names, and everything directly inside Data/data.
+ * configs it names, everything directly inside Data/data, and the Mogshot addon's saved
+ * variables for each account of each product (`_classic_beta_/WTF/Account/<account>/...`).
  */
 export async function filesFromDroppedFolder(root: FileSystemDirectoryEntry): Promise<PickedFile[]> {
   const buildInfo = await child(root, '.build.info', 'file');
@@ -59,6 +60,17 @@ export async function filesFromDroppedFolder(root: FileSystemDirectoryEntry): Pr
   if (data) {
     for (const entry of await entriesOf(data as FileSystemDirectoryEntry)) {
       if (entry.isFile) picked.push({ path: `Data/data/${entry.name}`, file: await fileOf(entry) });
+    }
+  }
+
+  for (const product of await entriesOf(root)) {
+    if (!product.isDirectory || !/^_.+_$/.test(product.name)) continue;
+    const accounts = await child(product as FileSystemDirectoryEntry, 'WTF/Account', 'directory');
+    if (!accounts) continue;
+    for (const account of await entriesOf(accounts as FileSystemDirectoryEntry)) {
+      if (!account.isDirectory) continue;
+      const saved = await child(account as FileSystemDirectoryEntry, 'SavedVariables/Mogshot.lua', 'file');
+      if (saved) picked.push({ path: `${product.name}/WTF/Account/${account.name}/SavedVariables/Mogshot.lua`, file: await fileOf(saved) });
     }
   }
   return picked;
