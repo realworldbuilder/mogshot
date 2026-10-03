@@ -8,7 +8,6 @@ Ideas that are not the one job (folder → character → pose → transparent PN
 - Animation sequences
 - Captions and stickers
 - Share codes
-- A command-line interface
 - 3D export
 - Creature and mount browser
 - Import from the armory (the addon import is built)
