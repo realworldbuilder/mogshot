@@ -3,12 +3,15 @@ import type { Option } from '../character/appearance';
 import type { ItemSummary, Slot } from '../character/equipment';
 import type { PosePreset } from '../character/poses';
 import type { AnimationInfo, PoseInfo, PoseRequest } from '../character/scene';
+import type { ImportedRecord } from '../import/record';
+import type { ImportResult } from '../import/resolve';
 import { encodePng, unpremultiply } from '../render/export';
 import { type Camera, CharacterRenderer, DEFAULT_CAMERA } from '../render/renderer';
 import type { Race } from '../worker/api';
 import type { DataClient } from '../worker/client';
 import { messageOf } from './App';
 import { GearPanel } from './GearPanel';
+import { ImportPanel } from './ImportPanel';
 
 const SEX_NAMES = ['Male', 'Female'];
 
@@ -55,9 +58,33 @@ interface Remembered {
   gear: [Slot, ItemSummary][];
   pose: PoseRequest;
   size: Size['id'];
+  classId?: number;
+  /** `Name-Realm` of the imported character on screen, if it was one. */
+  imported?: string;
 }
 
 const REMEMBER_KEY = 'mogshot.character';
+/** The look given to each imported character, by `Name-Realm`, so a face set by eye survives a re-import. */
+const LOOKS_KEY = 'mogshot.looks';
+
+type Looks = Record<string, [number, number][]>;
+
+function rememberedLooks(): Looks {
+  try {
+    const text = localStorage.getItem(LOOKS_KEY);
+    return text ? (JSON.parse(text) as Looks) : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberLook(key: string, choices: [number, number][]): void {
+  try {
+    localStorage.setItem(LOOKS_KEY, JSON.stringify({ ...rememberedLooks(), [key]: choices }));
+  } catch {
+    // Private windows and full storage: the look is simply not remembered.
+  }
+}
 
 function remembered(): Remembered | undefined {
   try {
@@ -76,7 +103,14 @@ function remember(value: Remembered): void {
   }
 }
 
-export function Viewer({ data }: { data: DataClient }) {
+interface ViewerProps {
+  data: DataClient;
+  /** The characters the addon captured, found in the folder. */
+  records: ImportedRecord[];
+  recordsError?: string;
+}
+
+export function Viewer({ data, records, recordsError }: ViewerProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<CharacterRenderer>(null);
   const request = useRef(0);
@@ -89,6 +123,8 @@ export function Viewer({ data }: { data: DataClient }) {
 
   const [races, setRaces] = useState<Race[]>();
   const [character, setCharacter] = useState<Character>();
+  const [classId, setClassId] = useState<number | undefined>(previous.current?.classId);
+  const [importedKey, setImportedKey] = useState<string | undefined>(previous.current?.imported);
   // What is worn stays on when the race or sex changes.
   const [gear, setGear] = useState<ReadonlyMap<Slot, ItemSummary>>(new Map(previous.current?.gear ?? []));
   const [shown, setShown] = useState<Shown>();
@@ -134,8 +170,20 @@ export function Viewer({ data }: { data: DataClient }) {
       gear: [...gear],
       pose: poseRequest.current,
       size: size.id,
+      classId,
+      imported: importedKey,
     });
-  }, [character, shown, gear, size, pose]);
+    if (importedKey) rememberLook(importedKey, [...shown.choices]);
+  }, [character, shown, gear, size, pose, classId, importedKey]);
+
+  /** Show an imported character: the captured look if there is one, else the look last given to this character. */
+  const showImported = (result: ImportResult, record: ImportedRecord) => {
+    const choices = result.choices.length > 0 ? result.choices : (rememberedLooks()[record.key] ?? []);
+    setCharacter({ raceId: result.raceId, sex: result.sex, choices });
+    setGear(new Map(result.gear));
+    if (result.classId !== undefined) setClassId(result.classId);
+    setImportedKey(record.key);
+  };
 
   // Build and draw whenever the character changes. A newer request supersedes an older one.
   useEffect(() => {
@@ -451,6 +499,7 @@ export function Viewer({ data }: { data: DataClient }) {
 
           <div class="controls">
             <span class="column-title">Character</span>
+            <ImportPanel data={data} records={records} recordsError={recordsError} selectedKey={importedKey} onImport={showImported} />
             <label class="field">
               <span>Race</span>
               <select
@@ -460,6 +509,7 @@ export function Viewer({ data }: { data: DataClient }) {
                   const next = races.find((r) => r.id === Number(event.currentTarget.value))!;
                   const sex = next.sexes.includes(character.sex) ? character.sex : (next.sexes[0] ?? 0);
                   setCharacter({ raceId: next.id, sex, choices: [] });
+                  setImportedKey(undefined);
                 }}
               >
                 {races.map((r) => (
@@ -473,7 +523,10 @@ export function Viewer({ data }: { data: DataClient }) {
                 {(race?.sexes ?? []).map((sex) => (
                   <button
                     class={sex === character.sex ? 'on' : ''}
-                    onClick={() => setCharacter({ raceId: character.raceId, sex, choices: [] })}
+                    onClick={() => {
+                      setCharacter({ raceId: character.raceId, sex, choices: [] });
+                      setImportedKey(undefined);
+                    }}
                   >
                     {SEX_NAMES[sex]}
                   </button>
@@ -569,6 +622,8 @@ export function Viewer({ data }: { data: DataClient }) {
             <GearPanel
               data={data}
               raceId={character.raceId}
+              classId={classId}
+              onClass={setClassId}
               gear={gear}
               onChange={(slot, item) => {
                 const next = new Map(gear);

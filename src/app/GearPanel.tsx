@@ -43,6 +43,9 @@ interface Props {
   data: DataClient;
   /** Race of the character, which decides the classes (and so the sets) on offer. */
   raceId: number;
+  /** The character's class, or undefined until the race's classes are known. */
+  classId: number | undefined;
+  onClass: (classId: number) => void;
   gear: ReadonlyMap<Slot, ItemSummary>;
   onChange: (slot: Slot, item: ItemSummary | undefined) => void;
   /** Replace everything worn at once. */
@@ -52,17 +55,19 @@ interface Props {
 const EPIC = 4;
 
 /** One row per visible slot, with shortcuts above. Clicking a row opens a search of the items that fit it. */
-export function GearPanel({ data, raceId, gear, onChange, onOutfit }: Props) {
+export function GearPanel({ data, raceId, classId, onClass, gear, onChange, onOutfit }: Props) {
   const [open, setOpen] = useState<Slot>();
   const [query, setQuery] = useState('');
   const [found, setFound] = useState<{ items: ItemSummary[]; total: number }>();
   const [error, setError] = useState<string>();
   const request = useRef(0);
   const [classes, setClasses] = useState<ClassInfo[]>([]);
-  const [classId, setClassId] = useState<number>();
   const [sets, setSets] = useState<ItemSetInfo[]>([]);
+  const chosenClass = useRef(classId);
+  chosenClass.current = classId;
 
-  // The classes this race can be, then the sets the chosen class can wear.
+  // The classes this race can be, then the sets the chosen class can wear. A class the race
+  // cannot be becomes the first it can.
   useEffect(() => {
     let current = true;
     data
@@ -70,7 +75,8 @@ export function GearPanel({ data, raceId, gear, onChange, onOutfit }: Props) {
       .then((list) => {
         if (!current) return;
         setClasses(list);
-        setClassId((previous) => (list.some((c) => c.id === previous) ? previous : list[0]?.id));
+        const first = list[0];
+        if (first && !list.some((c) => c.id === chosenClass.current)) onClass(first.id);
       })
       .catch((cause) => setError(messageOf(cause)));
     return () => {
@@ -127,7 +133,7 @@ export function GearPanel({ data, raceId, gear, onChange, onOutfit }: Props) {
         </button>
       </div>
       <div class="shortcuts">
-        <select id="class" aria-label="Class" value={classId} onChange={(event) => setClassId(Number(event.currentTarget.value))}>
+        <select id="class" aria-label="Class" value={classId} onChange={(event) => onClass(Number(event.currentTarget.value))}>
           {classes.map((c) => (
             <option value={c.id}>{c.name}</option>
           ))}

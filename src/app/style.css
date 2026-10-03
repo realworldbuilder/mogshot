@@ -427,3 +427,28 @@ select {
   flex: 1;
   min-width: 90px;
 }
+
+.import {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+#imported {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#import-code {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 0.875rem;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+}

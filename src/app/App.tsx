@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { InstallError, type OpenStage } from '../casc/storage';
+import { recordsFromFolder } from '../import/folder';
+import type { ImportedRecord } from '../import/record';
 import { filesFromDroppedFolder } from '../io/dropped-folder';
 import { type PickedFile, pickedFiles } from '../io/file-list-source';
 import type { OpenResult } from '../worker/api';
@@ -19,7 +21,7 @@ type Phase =
   | { kind: 'empty' }
   | { kind: 'opening'; message: string }
   | { kind: 'error'; message: string }
-  | { kind: 'ready'; opened: OpenResult; files: PickedFile[] };
+  | { kind: 'ready'; opened: OpenResult; files: PickedFile[]; records: ImportedRecord[]; recordsError?: string };
 
 // Mogshot is developed and tested in Chrome. Other browsers get the page with a warning.
 const chromium = 'chrome' in window;
@@ -46,7 +48,9 @@ export function App() {
     try {
       setPhase({ kind: 'opening', message: STAGE_TEXT.config });
       const opened = await data.current!.open(files, product, (stage) => setPhase({ kind: 'opening', message: STAGE_TEXT[stage] }));
-      setPhase({ kind: 'ready', opened, files });
+      // The addon's captured characters, if the folder has any. Nothing of the game is needed to read them.
+      const { records, error: recordsError } = await recordsFromFolder(files);
+      setPhase({ kind: 'ready', opened, files, records, recordsError });
     } catch (error) {
       fail(error);
     } finally {
@@ -152,7 +156,12 @@ export function App() {
 
       {phase.kind === 'ready' && (
         <>
-          <Viewer key={phase.opened.info.buildKey + phase.opened.info.product} data={data.current} />
+          <Viewer
+            key={phase.opened.info.buildKey + phase.opened.info.product}
+            data={data.current}
+            records={phase.records}
+            recordsError={phase.recordsError}
+          />
           <FolderDetails
             opened={phase.opened}
             dragging={dragging}
