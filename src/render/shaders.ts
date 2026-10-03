@@ -28,6 +28,7 @@ out vec2 v_texcoord2;
 out vec2 v_texcoord3;
 out vec3 v_normal;
 out float v_edge_fade;
+out float v_distance;
 
 mat4 bone(uint index) {
   int row = int(index);
@@ -58,6 +59,7 @@ void main() {
   skin = u_model * skin;
   vec4 position_view = u_view * skin * vec4(a_position, 1.0);
   gl_Position = u_projection * position_view;
+  v_distance = length(position_view.xyz);
   vec3 normal_view = normalize(mat3(u_view) * mat3(skin) * a_normal);
   v_normal = normal_view;
 
@@ -102,6 +104,7 @@ in vec2 v_texcoord2;
 in vec2 v_texcoord3;
 in vec3 v_normal;
 in float v_edge_fade;
+in float v_distance;
 
 uniform sampler2D u_texture1;
 uniform sampler2D u_texture2;
@@ -115,6 +118,9 @@ uniform vec3 u_ambient;
 uniform vec3 u_light_color;
 // Direction the light travels, in view space.
 uniform vec3 u_light_direction;
+// For props of a place: the haze they fade into and how far the place reaches; 0 for no haze.
+uniform vec3 u_haze;
+uniform float u_reach;
 
 out vec4 frag_color;
 
@@ -207,6 +213,10 @@ void main() {
     color *= clamp(u_ambient + u_light_color * n_dot_l, 0.0, 1.0);
   }
   color += specular;
+  float clear = u_reach > 0.0 ? 1.0 - smoothstep(u_reach * 0.25, u_reach, v_distance) : 1.0;
+  // Light added to the picture fades out in the haze; everything else fades into it.
+  if (u_blend_mode == 3 || u_blend_mode == 4) color *= clear;
+  else color = mix(u_haze, color, clear);
 
   // What goes to the blender. The framebuffer holds colour premultiplied by coverage, so
   // that the finished picture has correct transparency (see applyBlend in renderer.ts).
@@ -312,6 +322,7 @@ in float v_distance;
 uniform sampler2D u_texture;
 uniform int u_blend_mode;
 uniform bool u_outdoors;
+uniform bool u_baked;
 uniform bool u_unlit;
 // The sun's direction in the character's space, and the colours of sun, sky and haze.
 uniform vec3 u_sun_direction;
@@ -326,7 +337,8 @@ void main() {
   vec4 texel = texture(u_texture, v_texcoord);
   if (u_blend_mode == 1 && texel.a < 0.5) discard;
   vec3 normal = normalize(gl_FrontFacing ? v_normal : -v_normal);
-  vec3 light = v_baked.rgb * 2.0;
+  // A room with no baked light is lit evenly.
+  vec3 light = u_baked ? v_baked.rgb * 2.0 : vec3(0.75);
   if (u_outdoors) light = u_ambient + u_sun_color * max(dot(normal, u_sun_direction), 0.0) + v_baked.rgb;
   if (u_unlit) light = vec3(1.0);
   vec3 color = texel.rgb * light;

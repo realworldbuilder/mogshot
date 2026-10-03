@@ -41,4 +41,6 @@ export interface Drawn {
 
 /** Where the page asks for its job and leaves the PNG or the clip. Answered by the command line, not a server. */
 export const JOB_PATH = '/__mogshot/job';
+/** A job is handed over in pieces of this many bytes (`?part=0`, `1`, … until an empty one): one large answer can be too much for the browser's control channel. */
+export const JOB_PART = 16 * 1024 * 1024;
 export const PICTURE_PATH = '/__mogshot/picture';

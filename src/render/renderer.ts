@@ -76,17 +76,44 @@ interface PreparedDraw {
 
 /** A place's buffers on the graphics card. */
 interface GpuPlace {
-  meshes: { vao: WebGLVertexArrayObject; vertexBuffer: WebGLBuffer; indexBuffer: WebGLBuffer; outdoors: boolean; draws: PlaceDraw[] }[];
+  meshes: {
+    vao: WebGLVertexArrayObject;
+    vertexBuffer: WebGLBuffer;
+    indexBuffer: WebGLBuffer;
+    outdoors: boolean;
+    baked: boolean;
+    transform: Float32Array;
+    draws: PlaceDraw[];
+  }[];
   textures: WebGLTexture[];
-  transform: Float32Array;
+  /** Each prop model once, its batches ready to draw, and where its copies stand. */
+  props: { mesh: GpuMesh; draws: PreparedDraw[] }[];
+  propTextures: WebGLTexture[];
+  instances: { prop: number; transform: Float32Array }[];
   reach: number;
 }
 
 /** The haze the world fades into, and the sky where nothing is drawn. */
 const HAZE = [0.62, 0.71, 0.8] as const;
 
+/** Toward a mid-morning sun, in the character's space. */
+const SUN = /* @__PURE__ */ (() => {
+  const sun = [0.35, 0.45, 0.82] as const;
+  const length = Math.hypot(...sun);
+  return [sun[0] / length, sun[1] / length, sun[2] / length] as const;
+})();
+
+/** A direction turned by a matrix's rotation. */
+function transformDirection(m: Mat4, d: readonly [number, number, number]): [number, number, number] {
+  return [
+    m[0]! * d[0] + m[4]! * d[1] + m[8]! * d[2],
+    m[1]! * d[0] + m[5]! * d[1] + m[9]! * d[2],
+    m[2]! * d[0] + m[6]! * d[1] + m[10]! * d[2],
+  ];
+}
+
 const UNIFORMS = [
-  'u_view', 'u_projection', 'u_model', 'u_bones', 'u_vertex_shader', 'u_pixel_shader', 'u_blend_mode', 'u_unlit',
+  'u_view', 'u_projection', 'u_model', 'u_bones', 'u_vertex_shader', 'u_pixel_shader', 'u_blend_mode', 'u_unlit', 'u_haze', 'u_reach',
   'u_ambient', 'u_light_color', 'u_light_direction', 'u_texture1', 'u_texture2', 'u_texture3', 'u_texture4',
 ] as const;
 
@@ -109,6 +136,8 @@ export class CharacterRenderer {
   private framing: CharacterScene['bounds'] | undefined;
   /** Problems found while preparing the scene for drawing (unknown shaders and the like). */
   problems: string[] = [];
+  /** Problems found while preparing the place. */
+  placeProblems: string[] = [];
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: true });
@@ -137,62 +166,66 @@ export class CharacterRenderer {
       gl.deleteBuffer(mesh.indexBuffer);
       gl.deleteTexture(mesh.boneTexture);
     }
-    this.meshes = scene.meshes.map((mesh) => {
-      const vao = gl.createVertexArray()!;
-      const vertexBuffer = gl.createBuffer()!;
-      const indexBuffer = gl.createBuffer()!;
-      gl.bindVertexArray(vao);
-      gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, mesh.vertices, gl.STATIC_DRAW);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
-      // The model's 48-byte vertex, used as stored.
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, VERTEX_SIZE, 0);
-      gl.enableVertexAttribArray(1);
-      gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, VERTEX_SIZE, 12);
-      gl.enableVertexAttribArray(2);
-      gl.vertexAttribIPointer(2, 4, gl.UNSIGNED_BYTE, VERTEX_SIZE, 16);
-      gl.enableVertexAttribArray(3);
-      gl.vertexAttribPointer(3, 3, gl.FLOAT, false, VERTEX_SIZE, 20);
-      gl.enableVertexAttribArray(4);
-      gl.vertexAttribPointer(4, 2, gl.FLOAT, false, VERTEX_SIZE, 32);
-      gl.enableVertexAttribArray(5);
-      gl.vertexAttribPointer(5, 2, gl.FLOAT, false, VERTEX_SIZE, 40);
-      gl.bindVertexArray(null);
-
-      // One bone per row, four texels wide.
-      const boneTexture = gl.createTexture()!;
-      gl.bindTexture(gl.TEXTURE_2D, boneTexture);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      const rows = Math.max(1, mesh.bones.length / 16);
-      const matrices = mesh.bones.length > 0 ? mesh.bones : new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 4, rows, 0, gl.RGBA, gl.FLOAT, matrices);
-      return { vao, vertexBuffer, indexBuffer, boneTexture, transform: mesh.transform, bones: mesh.bones, billboards: mesh.billboards };
-    });
+    this.meshes = scene.meshes.map((mesh) => this.uploadMesh(mesh));
 
     for (const texture of this.textures) gl.deleteTexture(texture);
     this.textures = scene.textures.map((image) => this.upload(image));
 
     const prepared: PreparedDraw[] = [];
-    scene.meshes.forEach((mesh, meshIndex) => {
-      for (const draw of mesh.draws) {
-        const shaders = combiners(draw.shaderId, draw.textureCount);
-        if (!shaders) {
-          this.problems.push(`Geoset ${draw.sectionId} uses a shader this app does not know (${draw.shaderId})`);
-          continue;
-        }
-        prepared.push({ mesh: this.meshes[meshIndex]!, draw, vertexShader: shaders.vertex, pixelShader: shaders.pixel });
-      }
-    });
-    // Solid batches first, then blended ones in the model's order of priority and layer.
-    const blended = (d: PreparedDraw) => (d.draw.blendMode > 1 ? 1 : 0);
-    this.draws = prepared
-      .map((d, i) => ({ d, i }))
-      .sort((a, b) => blended(a.d) - blended(b.d) || a.d.draw.priority - b.d.draw.priority || a.d.draw.layer - b.d.draw.layer || a.i - b.i)
-      .map(({ d }) => d);
+    scene.meshes.forEach((mesh, meshIndex) => prepared.push(...this.prepare(mesh, this.meshes[meshIndex]!, this.problems)));
+    this.draws = inOrder(prepared);
   }
+
+  /** A mesh's batches with the shaders each uses; a batch with a shader this app does not know is named and left out. */
+  private prepare(mesh: SceneMesh, gpu: GpuMesh, problems: string[]): PreparedDraw[] {
+    const prepared: PreparedDraw[] = [];
+    for (const draw of mesh.draws) {
+      const shaders = combiners(draw.shaderId, draw.textureCount);
+      if (!shaders) {
+        problems.push(`Geoset ${draw.sectionId} uses a shader this app does not know (${draw.shaderId})`);
+        continue;
+      }
+      prepared.push({ mesh: gpu, draw, vertexShader: shaders.vertex, pixelShader: shaders.pixel });
+    }
+    return prepared;
+  }
+
+  /** A model's vertices, triangles and bones on the graphics card. */
+  private uploadMesh(mesh: SceneMesh): GpuMesh {
+    const { gl } = this;
+    const vao = gl.createVertexArray()!;
+    const vertexBuffer = gl.createBuffer()!;
+    const indexBuffer = gl.createBuffer()!;
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.vertices, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+    // The model's 48-byte vertex, used as stored.
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, VERTEX_SIZE, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, VERTEX_SIZE, 12);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribIPointer(2, 4, gl.UNSIGNED_BYTE, VERTEX_SIZE, 16);
+    gl.enableVertexAttribArray(3);
+    gl.vertexAttribPointer(3, 3, gl.FLOAT, false, VERTEX_SIZE, 20);
+    gl.enableVertexAttribArray(4);
+    gl.vertexAttribPointer(4, 2, gl.FLOAT, false, VERTEX_SIZE, 32);
+    gl.enableVertexAttribArray(5);
+    gl.vertexAttribPointer(5, 2, gl.FLOAT, false, VERTEX_SIZE, 40);
+    gl.bindVertexArray(null);
+
+    // One bone per row, four texels wide.
+    const boneTexture = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, boneTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    const rows = Math.max(1, mesh.bones.length / 16);
+    const matrices = mesh.bones.length > 0 ? mesh.bones : new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 4, rows, 0, gl.RGBA, gl.FLOAT, matrices);
+    return { vao, vertexBuffer, indexBuffer, boneTexture, transform: mesh.transform, bones: mesh.bones, billboards: mesh.billboards };
+    }
 
   /** A texture with mipmaps, wrapping as the image says. */
   private upload(image: CharacterScene['textures'][number]): WebGLTexture {
@@ -243,9 +276,16 @@ export class CharacterRenderer {
         gl.deleteBuffer(mesh.vertexBuffer);
         gl.deleteBuffer(mesh.indexBuffer);
       }
-      for (const texture of this.place.textures) gl.deleteTexture(texture);
+      for (const { mesh } of this.place.props) {
+        gl.deleteVertexArray(mesh.vao);
+        gl.deleteBuffer(mesh.vertexBuffer);
+        gl.deleteBuffer(mesh.indexBuffer);
+        gl.deleteTexture(mesh.boneTexture);
+      }
+      for (const texture of [...this.place.textures, ...this.place.propTextures]) gl.deleteTexture(texture);
     }
     this.place = undefined;
+    this.placeProblems = [];
     if (!place) return;
     const meshes = place.meshes.map((mesh) => {
       const vao = gl.createVertexArray()!;
@@ -265,9 +305,23 @@ export class CharacterRenderer {
       gl.enableVertexAttribArray(3);
       gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, PLACE_VERTEX_SIZE, 32);
       gl.bindVertexArray(null);
-      return { vao, vertexBuffer, indexBuffer, outdoors: mesh.outdoors, draws: mesh.draws };
+      return { vao, vertexBuffer, indexBuffer, outdoors: mesh.outdoors, baked: mesh.baked, transform: mesh.transform, draws: mesh.draws };
     });
-    this.place = { meshes, textures: place.textures.map((image) => this.upload(image)), transform: place.transform, reach: place.reach };
+    // A prop with a shader this app does not know is drawn without that batch; one line says how many.
+    const unknown: string[] = [];
+    const props = place.props.map((prop) => {
+      const mesh = this.uploadMesh(prop);
+      return { mesh, draws: inOrder(this.prepare(prop, mesh, unknown)) };
+    });
+    this.placeProblems = unknown.length > 0 ? [`${unknown.length} parts of props in the place use shaders this app does not know and are not drawn`] : [];
+    this.place = {
+      meshes,
+      textures: place.textures.map((image) => this.upload(image)),
+      props,
+      propTextures: place.propTextures.map((image) => this.upload(image)),
+      instances: place.instances,
+      reach: place.reach,
+    };
   }
 
   /** Move the scene's meshes to a new pose (see CharacterRig.pose). */
@@ -433,7 +487,6 @@ export class CharacterRenderer {
   /** Draw the backdrop, if any, and the scene into the bound framebuffer. */
   private draw(view: Mat4, projection: Mat4, axes: CameraAxes, frame: Frame, width: number, height: number): void {
     const { gl, uniforms } = this;
-    for (const mesh of this.meshes) this.aimBillboards(mesh, axes);
     gl.viewport(0, 0, width, height);
     // A place fills the frame: its haze is the sky where nothing stands.
     if (this.place) gl.clearColor(HAZE[0], HAZE[1], HAZE[2], 1);
@@ -453,16 +506,11 @@ export class CharacterRenderer {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     if (this.place) this.drawPlace(this.place, view, projection);
-    if (this.draws.length === 0) return;
+    if (this.draws.length === 0 && !this.place) return;
 
     gl.useProgram(this.program);
     gl.uniformMatrix4fv(uniforms.u_view, false, view);
     gl.uniformMatrix4fv(uniforms.u_projection, false, projection);
-
-    // A light from in front of and above the character, slightly to one side, fixed to the camera.
-    gl.uniform3f(uniforms.u_ambient, 0.55, 0.55, 0.55);
-    gl.uniform3f(uniforms.u_light_color, 0.6, 0.6, 0.6);
-    gl.uniform3f(uniforms.u_light_direction, 0.35, -0.5, -0.8);
 
     gl.uniform1i(uniforms.u_bones, 4);
     gl.uniform1i(uniforms.u_texture1, 0);
@@ -473,33 +521,68 @@ export class CharacterRenderer {
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
 
-    for (const { mesh, draw, vertexShader, pixelShader } of this.draws) {
-      gl.bindVertexArray(mesh.vao);
-      gl.activeTexture(gl.TEXTURE4);
-      gl.bindTexture(gl.TEXTURE_2D, mesh.boneTexture);
-      gl.uniformMatrix4fv(uniforms.u_model, false, mesh.transform);
-      gl.uniform1i(uniforms.u_vertex_shader, vertexShader);
-      gl.uniform1i(uniforms.u_pixel_shader, pixelShader);
-      gl.uniform1i(uniforms.u_blend_mode, draw.blendMode);
-      gl.uniform1i(uniforms.u_unlit, draw.materialFlags & 0x1 ? 1 : 0);
-
-      if (draw.materialFlags & 0x4) gl.disable(gl.CULL_FACE);
-      else gl.enable(gl.CULL_FACE);
-      if (draw.materialFlags & 0x8) gl.disable(gl.DEPTH_TEST);
-      else gl.enable(gl.DEPTH_TEST);
-      gl.depthMask((draw.materialFlags & 0x10) === 0);
-      this.applyBlend(draw.blendMode);
-
-      for (let stage = 0; stage < 4; stage++) {
-        gl.activeTexture(gl.TEXTURE0 + stage);
-        gl.bindTexture(gl.TEXTURE_2D, this.textures[draw.textures[stage] ?? -1] ?? this.white);
+    if (this.place) {
+      // Props: lit by the place's sun, fading into its haze.
+      const sun = transformDirection(view, SUN);
+      gl.uniform3f(uniforms.u_ambient, 0.5, 0.52, 0.58);
+      gl.uniform3f(uniforms.u_light_color, 0.7, 0.66, 0.58);
+      gl.uniform3f(uniforms.u_light_direction, -sun[0], -sun[1], -sun[2]);
+      gl.uniform3f(uniforms.u_haze, HAZE[0], HAZE[1], HAZE[2]);
+      gl.uniform1f(uniforms.u_reach, this.place.reach);
+      const { props, propTextures, instances } = this.place;
+      for (const blended of [false, true]) {
+        for (const instance of instances) {
+          const prop = props[instance.prop]!;
+          prop.mesh.transform = instance.transform;
+          let aimed = false;
+          for (const draw of prop.draws) {
+            if (draw.draw.blendMode > 1 !== blended) continue;
+            // The bones are shared by every copy, so billboards are aimed for the copy being drawn.
+            if (!aimed) this.aimBillboards(prop.mesh, axes);
+            aimed = true;
+            this.drawBatch(draw, propTextures);
+          }
+        }
       }
-      gl.drawElements(gl.TRIANGLES, draw.indexCount, gl.UNSIGNED_SHORT, draw.indexStart * 2);
     }
+
+    // A light from in front of and above the character, slightly to one side, fixed to the camera.
+    gl.uniform3f(uniforms.u_ambient, 0.55, 0.55, 0.55);
+    gl.uniform3f(uniforms.u_light_color, 0.6, 0.6, 0.6);
+    gl.uniform3f(uniforms.u_light_direction, 0.35, -0.5, -0.8);
+    gl.uniform1f(uniforms.u_reach, 0);
+    for (const mesh of this.meshes) this.aimBillboards(mesh, axes);
+    for (const draw of this.draws) this.drawBatch(draw, this.textures);
 
     gl.bindVertexArray(null);
     gl.depthMask(true);
     gl.disable(gl.BLEND);
+  }
+
+  /** Draw one batch of a model with the model program, which is in use with its camera and light set. */
+  private drawBatch({ mesh, draw, vertexShader, pixelShader }: PreparedDraw, textures: WebGLTexture[]): void {
+    const { gl, uniforms } = this;
+    gl.bindVertexArray(mesh.vao);
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, mesh.boneTexture);
+    gl.uniformMatrix4fv(uniforms.u_model, false, mesh.transform);
+    gl.uniform1i(uniforms.u_vertex_shader, vertexShader);
+    gl.uniform1i(uniforms.u_pixel_shader, pixelShader);
+    gl.uniform1i(uniforms.u_blend_mode, draw.blendMode);
+    gl.uniform1i(uniforms.u_unlit, draw.materialFlags & 0x1 ? 1 : 0);
+
+    if (draw.materialFlags & 0x4) gl.disable(gl.CULL_FACE);
+    else gl.enable(gl.CULL_FACE);
+    if (draw.materialFlags & 0x8) gl.disable(gl.DEPTH_TEST);
+    else gl.enable(gl.DEPTH_TEST);
+    gl.depthMask((draw.materialFlags & 0x10) === 0);
+    this.applyBlend(draw.blendMode);
+
+    for (let stage = 0; stage < 4; stage++) {
+      gl.activeTexture(gl.TEXTURE0 + stage);
+      gl.bindTexture(gl.TEXTURE_2D, textures[draw.textures[stage] ?? -1] ?? this.white);
+    }
+    gl.drawElements(gl.TRIANGLES, draw.indexCount, gl.UNSIGNED_SHORT, draw.indexStart * 2);
   }
 
   /** Draw the world: solid surfaces first, then the blended ones over them. */
@@ -509,17 +592,15 @@ export class CharacterRenderer {
     gl.useProgram(placeProgram);
     gl.uniformMatrix4fv(at('u_view'), false, view);
     gl.uniformMatrix4fv(at('u_projection'), false, projection);
-    gl.uniformMatrix4fv(at('u_model'), false, place.transform);
     gl.uniform1i(at('u_texture'), 0);
-    // A mid-morning sun, in the character's space.
-    const sun = [0.35, 0.45, 0.82];
-    const length = Math.hypot(sun[0]!, sun[1]!, sun[2]!);
-    gl.uniform3f(at('u_sun_direction'), sun[0]! / length, sun[1]! / length, sun[2]! / length);
+    gl.uniform3f(at('u_sun_direction'), SUN[0], SUN[1], SUN[2]);
     gl.uniform3f(at('u_sun_color'), 0.75, 0.7, 0.62);
     gl.uniform3f(at('u_ambient'), 0.42, 0.45, 0.52);
     gl.uniform3f(at('u_haze'), HAZE[0], HAZE[1], HAZE[2]);
     gl.uniform1f(at('u_reach'), place.reach);
+    const model = at('u_model');
     const outdoors = at('u_outdoors');
+    const baked = at('u_baked');
     const blendMode = at('u_blend_mode');
     const unlit = at('u_unlit');
 
@@ -534,7 +615,9 @@ export class CharacterRenderer {
       } else gl.disable(gl.BLEND);
       for (const mesh of place.meshes) {
         gl.bindVertexArray(mesh.vao);
+        gl.uniformMatrix4fv(model, false, mesh.transform);
         gl.uniform1i(outdoors, mesh.outdoors ? 1 : 0);
+        gl.uniform1i(baked, mesh.baked ? 1 : 0);
         for (const draw of mesh.draws) {
           if (draw.blendMode > 1 !== blended) continue;
           if (draw.twoSided) gl.disable(gl.CULL_FACE);
@@ -680,4 +763,13 @@ function link(gl: WebGL2RenderingContext, vertexSource: string, fragmentSource: 
     throw new Error(`Shader program failed to link: ${gl.getProgramInfoLog(program)}`);
   }
   return program;
+}
+
+/** Solid batches first, then blended ones in the model's order of priority and layer. */
+function inOrder(draws: PreparedDraw[]): PreparedDraw[] {
+  const blended = (d: PreparedDraw) => (d.draw.blendMode > 1 ? 1 : 0);
+  return draws
+    .map((d, i) => ({ d, i }))
+    .sort((a, b) => blended(a.d) - blended(b.d) || a.d.draw.priority - b.d.draw.priority || a.d.draw.layer - b.d.draw.layer || a.i - b.i)
+    .map(({ d }) => d);
 }

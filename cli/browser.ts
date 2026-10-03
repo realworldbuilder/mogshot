@@ -1,5 +1,5 @@
 import { type Browser, chromium, type Page } from '@playwright/test';
-import { type Drawn, JOB_PATH, PICTURE_PATH } from './job';
+import { type Drawn, JOB_PART, JOB_PATH, PICTURE_PATH } from './job';
 
 /** Chrome with the drawing page open, kept for a whole batch of pictures. */
 export class Darkroom {
@@ -20,7 +20,11 @@ export class Darkroom {
     }
     const page = await browser.newPage();
     const room = new Darkroom(browser, page);
-    await page.route(`**${JOB_PATH}`, (route) => route.fulfill({ body: Buffer.from(room.job ?? []), contentType: 'application/octet-stream' }));
+    await page.route(`**${JOB_PATH}?part=*`, (route) => {
+      const part = Number(new URL(route.request().url()).searchParams.get('part'));
+      const body = Buffer.from((room.job ?? new Uint8Array(0)).subarray(part * JOB_PART, (part + 1) * JOB_PART));
+      return route.fulfill({ body, contentType: 'application/octet-stream' });
+    });
     await page.route(`**${PICTURE_PATH}`, (route) => {
       room.picture = route.request().postDataBuffer() ?? undefined;
       return route.fulfill({ status: 204 });

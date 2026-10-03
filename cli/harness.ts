@@ -2,7 +2,7 @@ import { CLASSIC_SCREEN_ASPECT, composeBackdrop } from '../src/render/backdrop';
 import { encodeClip } from '../src/render/clip';
 import { encodePng, unpremultiply } from '../src/render/export';
 import { CharacterRenderer } from '../src/render/renderer';
-import { type Drawn, type Job, JOB_PATH, PICTURE_PATH } from './job';
+import { type Drawn, type Job, JOB_PART, JOB_PATH, PICTURE_PATH } from './job';
 import { unpack } from './wire';
 
 /*
@@ -18,8 +18,25 @@ function graphics(): string {
   return gl ? String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER)) : 'none';
 }
 
+/** The job's bytes, fetched piece by piece. */
+async function fetchJob(): Promise<Uint8Array> {
+  const parts: Uint8Array[] = [];
+  for (;;) {
+    const part = new Uint8Array(await (await fetch(`${JOB_PATH}?part=${parts.length}`)).arrayBuffer());
+    parts.push(part);
+    if (part.length < JOB_PART) break;
+  }
+  const bytes = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    bytes.set(part, at);
+    at += part.length;
+  }
+  return bytes;
+}
+
 async function shoot(): Promise<Drawn> {
-  const job = unpack<Job>(new Uint8Array(await (await fetch(JOB_PATH)).arrayBuffer()));
+  const job = unpack<Job>(await fetchJob());
   renderer ??= new CharacterRenderer(document.createElement('canvas'));
   renderer.setScene(job.scene);
   const { width, height } = job;
@@ -43,14 +60,14 @@ async function shoot(): Promise<Drawn> {
       },
     });
     await fetch(PICTURE_PATH, { method: 'POST', body: bytes as BodyInit });
-    return { width, height, frames: clip.poses.length, problems: renderer.problems, graphics: graphics() };
+    return { width, height, frames: clip.poses.length, problems: [...renderer.problems, ...renderer.placeProblems], graphics: graphics() };
   }
   // With a backdrop the whole frame is the picture; a tight crop is for a character alone.
   const image = renderer.renderImage(job.camera, { longSide: Math.max(width, height), aspect: width / height, tight: job.tight && !backdrop && !job.place });
   unpremultiply(image.pixels);
   const png = await encodePng(image);
   await fetch(PICTURE_PATH, { method: 'POST', body: png as BodyInit });
-  return { width: image.width, height: image.height, problems: renderer.problems, graphics: graphics() };
+  return { width: image.width, height: image.height, problems: [...renderer.problems, ...renderer.placeProblems], graphics: graphics() };
 }
 
 declare global {
