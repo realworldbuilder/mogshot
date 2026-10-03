@@ -4,7 +4,6 @@ Ideas that are not the one job (folder → character → pose → transparent PN
 
 - Scenes and places behind the character: the 3D character-select screens, zones (the game's 2D loading screens are in)
 - Sky and weather
-- Video and GIF export
 - Animation sequences
 - Captions and stickers
 - Share codes

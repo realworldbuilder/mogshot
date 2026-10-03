@@ -16,6 +16,7 @@ What works today, in Chrome on a Mac, against WoW build 1.60.1.70170 (`wow_class
 - Picture your own characters: a small addon (in [addon/Mogshot](addon/Mogshot)) remembers each character's race, sex, class and worn items, and their appearance choices once they visit a barber. The page finds that file inside the folder you drop and lists your characters; pick one and it is drawn in its gear. `/mogshot` in the game also shows a code to paste into the page. A face set by eye is kept for that character across imports. Whatever cannot be placed is said in words: items not in the data, a bow when both hands are full, choices from another race.
 - Dress the character: each of the thirteen visible slots (head, shoulders, back, chest, shirt, tabard, wrists, hands, waist, legs, feet, main hand, off hand) has a search by name with the items' icons. Armour is painted and shaped on the body, helms, shoulders, weapons and shields are attached, a held weapon closes the hand, and glows face the camera.
 - Pose it: eleven curated poses (Stand, Ready, Attack, Cast, Roar, Cheer, Point, Flex, Salute, Wave, Kneel; Ready and Attack follow the weapon held), or pick any of the model's animations and scrub to a moment of it.
+- Film it: Play runs the animation on screen in a loop with the camera held steady. Download clip saves one pass of it, which loops without a seam, as an MP4 video (H.264, 30 frames a second, up to 1080p in the picture's shape), a GIF (25 frames a second, up to 800 pixels), or a zip of transparent PNG frames for an editor. Video and GIF cannot be transparent: with no backdrop their background is black.
 - Frame it: drag to turn, shift-drag to slide, scroll to zoom, a lens slider from flat to wide, and a reset. The view always starts framed on the character.
 - Save it: a tight 4K crop, 4K, 1080p, a YouTube thumbnail or a square, as a transparent PNG with straight alpha, downloaded or copied to the clipboard. The preview has the shape of the picture that will be saved.
 - Put a backdrop behind it: a colour, one of eight gradients or your own two colours (as a spotlight or top to bottom), or one of the game's own loading screens, picked by zone or instance name and read from your install; blur and vignette sliders. The backdrop is drawn under the character, so glows blend into it exactly, and the picture is saved uncropped at the preset's size. "Backdrop only" saves the backdrop by itself, to layer under a transparent character in Canva.
@@ -43,7 +44,7 @@ Not yet tested: Edge, Windows, other browsers, and any other WoW product. Encryp
 
 ## Command line
 
-The same pictures without the page, for scripts and assistants: write down what you want, get PNG files.
+The same pictures and clips without the page, for scripts and assistants: write down what you want, get PNG files, or MP4, GIF and PNG-frame clips.
 
 ```
 pnpm mogshot render shots.json
@@ -53,11 +54,12 @@ pnpm mogshot render shots.json
 [
   { "out": "rambleon.png", "character": "Rambleon", "pose": "Ready" },
   { "out": "warrior.png", "race": "Orc", "sex": "male", "set": { "class": "Warrior" }, "pose": "Roar",
-    "camera": { "yaw": 20 }, "size": "square", "backdrop": "Ember" }
+    "camera": { "yaw": 20 }, "size": "square", "backdrop": "Ember" },
+  { "out": "dance.mp4", "race": "Tauren", "sex": "male", "clip": { "animation": "EmoteDance" }, "backdrop": "Frost" }
 ]
 ```
 
-A spec names a race and sex or a character the addon saved, and optionally appearance choices, a class set, items by name or id, a pose or a moment of an animation, the camera, a size and a backdrop. `pnpm mogshot help` lists every field; `races`, `options`, `poses`, `items`, `sets`, `backdrops`, `sizes` and `characters` list what can be named. Everything is printed as JSON, with each picture's problems. A name that cannot be placed is an error that lists what there is, not a guess.
+A spec names a race and sex or a character the addon saved, and optionally appearance choices, a class set, items by name or id, a pose or a moment of an animation, the camera, a size and a backdrop. With `"clip": true` it is filmed instead: a looping clip of the pose's animation (or one named, or a number of seconds), saved by the ending of `out` as `.mp4`, `.gif` or `.zip` (PNG frames). `pnpm mogshot help` lists every field; `races`, `options`, `poses`, `items`, `sets`, `backdrops`, `sizes` and `characters` list what can be named. Everything is printed as JSON, with each picture's problems. A name that cannot be placed is an error that lists what there is, not a guess.
 
 Node reads the game folder (`--wow <folder>` or `WOW_DIR`, default `/Applications/World of Warcraft`) and builds the character; installed Chrome, run without a window, draws it with the page's own renderer. Tried on one Mac only. A first run reads the install's index; after that a picture takes one to three seconds.
 
