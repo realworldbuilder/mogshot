@@ -20,6 +20,8 @@ export interface CharacterModel {
 export interface Race {
   id: number;
   name: string;
+  /** The game's file name for the race (`Orc`, `NightElf`, `Scourge`), as the addon API reports it. */
+  file: string;
   /** Sexes the race has a model for: 0 = male, 1 = female. */
   sexes: number[];
 }
@@ -149,7 +151,7 @@ export class Appearance {
       database.table('CharComponentTextureSections', ['CharComponentTextureLayoutID', 'SectionType', 'X', 'Y', 'Width', 'Height']),
       database.table('ChrCustomizationBoneSet', ['BoneFileDataID', 'ModelFileDataID']),
       database.table('ChrCustomizationSkinnedModel', ['CollectionsFileDataID', 'GeosetType', 'GeosetID']),
-      database.table('ChrRaces', ['Name_lang']),
+      database.table('ChrRaces', ['Name_lang', 'ClientFileString']),
       // The race and class combinations the character creation screen offers.
       database.table('CharBaseInfo', ['RaceID']),
     ]);
@@ -225,6 +227,7 @@ export class Appearance {
       .map((row) => ({
         id: n(row.ID),
         name: String(row.Name_lang),
+        file: String(row.ClientFileString ?? ''),
         sexes: [0, 1].filter((sex) => models.has(`${n(row.ID)}:${sex}`)),
       }))
       .filter((race) => race.sexes.length > 0)

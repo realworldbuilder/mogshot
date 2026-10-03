@@ -6,6 +6,8 @@ import type { ClassInfo, ItemSetInfo, ItemSummary, Slot } from '../character/equ
 import type { Image } from '../formats/blp';
 import type { CharacterScene, PoseRequest, PoseResult } from '../character/scene';
 import type { PickedFile } from '../io/file-list-source';
+import type { ImportedRecord } from '../import/record';
+import type { ImportResult } from '../import/resolve';
 
 export interface OpenResult {
   info: StorageInfo;
@@ -32,7 +34,8 @@ export type Request =
   | { id: number; method: 'classes'; raceId: number }
   | { id: number; method: 'sets'; classId: number }
   | { id: number; method: 'randomOutfit'; minQuality: number }
-  | { id: number; method: 'icon'; fileId: number };
+  | { id: number; method: 'icon'; fileId: number }
+  | { id: number; method: 'resolveImport'; record: ImportedRecord };
 
 export interface ItemSearchResult {
   items: ItemSummary[];
@@ -43,7 +46,7 @@ export interface ItemSearchResult {
 /** An icon's pixels, or undefined if the file cannot be read. */
 export type IconResult = Image | undefined;
 
-export type { ClassInfo, ItemSetInfo, ItemSummary, PoseRequest, PoseResult, Race, Slot };
+export type { ClassInfo, ImportedRecord, ImportResult, ItemSetInfo, ItemSummary, PoseRequest, PoseResult, Race, Slot };
 
 export interface CharacterResult {
   scene: CharacterScene;

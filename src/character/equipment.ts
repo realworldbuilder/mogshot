@@ -143,6 +143,8 @@ export class Equipment {
 
   private constructor(
     summaries: ItemSummary[],
+    /** For each item left out of the list as a twin of another (same name, look and slot), the one kept. */
+    private readonly canonical: Map<number, number>,
     private readonly itemFacts: Map<number, { allowableClass: number; level: number }>,
     private readonly setRows: { id: number; name: string; itemIds: number[] }[],
     private readonly classNames: Map<number, string>,
@@ -229,7 +231,8 @@ export class Equipment {
     const itemRows = new Map(item.rows.map((row) => [n(row.ID), row]));
     const visibleTypes = new Set(SLOTS.flatMap((slot) => slot.inventoryTypes));
     const summaries: ItemSummary[] = [];
-    const seen = new Set<string>();
+    const seen = new Map<string, number>();
+    const canonical = new Map<number, number>();
     for (const row of sparse.rows) {
       const id = n(row.ID);
       const inventoryType = n(row.InventoryType);
@@ -238,8 +241,12 @@ export class Equipment {
       if (!visibleTypes.has(inventoryType) || displayId === undefined || name === '') continue;
       // Many items share a name and a look (quest and drop versions); list one of each.
       const key = `${name}\u0000${displayId}\u0000${inventoryType}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const kept = seen.get(key);
+      if (kept !== undefined) {
+        canonical.set(id, kept);
+        continue;
+      }
+      seen.set(key, id);
       summaries.push({
         id,
         name,
@@ -302,6 +309,7 @@ export class Equipment {
 
     return new Equipment(
       summaries,
+      canonical,
       new Map(sparse.rows.map((row) => [n(row.ID), { allowableClass: n(row.AllowableClass), level: n(row.ItemLevel) }])),
       itemSets.rows.map((row) => ({ id: n(row.ID), name: String(row.Name_lang), itemIds: (row.ItemID as number[]).filter(Boolean) })),
       new Map(classes.rows.map((row) => [n(row.ID), String(row.Name_lang)])),
@@ -333,6 +341,14 @@ export class Equipment {
 
   item(id: number): ItemSummary | undefined {
     return this.items.get(id);
+  }
+
+  /**
+   * The listed item for any item id the game has, including ids left out of the list as
+   * twins of a listed item. Undefined if the id has no look in this build.
+   */
+  resolveItem(id: number): ItemSummary | undefined {
+    return this.items.get(id) ?? this.items.get(this.canonical.get(id) ?? -1);
   }
 
   /** The classes a race can be, in name order. */

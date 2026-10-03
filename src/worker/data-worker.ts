@@ -7,6 +7,7 @@ import { buildCharacterScene, type CharacterRig } from '../character/scene';
 import { Database } from '../db2/database';
 import { Definitions } from '../db2/definitions';
 import { decodeBlp } from '../formats/blp';
+import { resolveImport } from '../import/resolve';
 import { FileListSource } from '../io/file-list-source';
 import type { CharacterResult, IconResult, ItemSearchResult, OpenResult, Request, Response } from './api';
 
@@ -114,6 +115,10 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       return { value: (await loadEquipment()).sets(request.classId) };
     case 'randomOutfit':
       return { value: (await loadEquipment()).randomOutfit(request.minQuality) };
+    case 'resolveImport': {
+      const [looks, items] = await Promise.all([loadAppearance(), loadEquipment()]);
+      return { value: resolveImport(request.record, looks, items) };
+    }
     case 'icon': {
       if (!storage) throw new Error('No folder is open');
       const file = request.fileId ? await storage.readFile(request.fileId) : undefined;

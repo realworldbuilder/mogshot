@@ -3,6 +3,8 @@ import type { PickedFile } from '../io/file-list-source';
 import type {
   CharacterResult,
   ClassInfo,
+  ImportedRecord,
+  ImportResult,
   ItemSetInfo,
   ItemSummary,
   IconResult,
@@ -98,5 +100,10 @@ export class DataClient {
 
   icon(fileId: number): Promise<IconResult> {
     return this.call({ method: 'icon', fileId });
+  }
+
+  /** A captured character as the game data of the open folder has it. */
+  resolveImport(record: ImportedRecord): Promise<ImportResult> {
+    return this.call({ method: 'resolveImport', record });
   }
 }
