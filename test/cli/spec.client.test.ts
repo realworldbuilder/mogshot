@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { unzipSync } from 'fflate';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Session } from '../../cli/session';
 import { resolveSpec, type World } from '../../cli/spec';
@@ -85,4 +86,53 @@ describe.skipIf(!hasClient)('a spec', () => {
 
     expect(bad!.error).toMatch(/no pose called "Moonwalk".*Stand/);
   }, 120_000);
+
+  it('films a looping clip as video, GIF and PNG frames', async () => {
+    const dir = join(ROOT, 'test-results', 'cli');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, 'clips.json'),
+      JSON.stringify([
+        { out: 'stand.mp4', race: 'Dwarf', sex: 'male', clip: true, size: { width: 480, height: 480 }, backdrop: 'Ember' },
+        { out: 'dance.gif', race: 'Tauren', sex: 'male', clip: { animation: 'EmoteDance' }, size: { width: 320, height: 240 }, backdrop: 'Frost' },
+        { out: 'frames.zip', race: 'Human', sex: 'female', clip: { seconds: 0.2, fps: 10 }, size: { width: 200, height: 250 } },
+        { out: 'clip.png', race: 'Human', clip: true },
+        { out: 'still.mp4', race: 'Human' },
+      ]),
+    );
+    const { stdout } = await promisify(execFile)('node', [join(ROOT, 'bin', 'mogshot.mjs'), 'render', join(dir, 'clips.json'), '--wow', WOW_DIR]).catch(
+      (error: { stdout: string; code: number }) => {
+        expect(error.code).toBe(1);
+        return error;
+      },
+    );
+    type Report = { width: number; height: number; problems: string[]; error?: string; clip: { animation: string; frames: number; fps: number; length: number } };
+    const [stand, dance, frames, wrongName, noClip] = JSON.parse(stdout) as Report[];
+
+    expect(stand!.problems).toEqual([]);
+    expect(stand!.clip).toMatchObject({ animation: 'Stand', fps: 30 });
+    expect(stand!.clip.frames).toBeGreaterThan(30);
+    // An MP4 starts with its file-type box, then (fast start) the index before the pictures.
+    const video = await readFile(join(dir, 'stand.mp4'));
+    expect(video.subarray(4, 8).toString('latin1')).toBe('ftyp');
+    expect(video.indexOf('moov')).toBeLessThan(video.indexOf('mdat'));
+    expect(video.includes('avc1')).toBe(true);
+
+    expect(dance!.clip).toMatchObject({ animation: 'EmoteDance', fps: 25 });
+    const gif = await readFile(join(dir, 'dance.gif'));
+    expect(gif.subarray(0, 6).toString('latin1')).toBe('GIF89a');
+    expect([gif.readUInt16LE(6), gif.readUInt16LE(8)]).toEqual([320, 240]);
+
+    expect(frames!.clip.frames).toBe(2);
+    const zipped = unzipSync(new Uint8Array(await readFile(join(dir, 'frames.zip'))));
+    expect(Object.keys(zipped)).toEqual(['frame-0001.png', 'frame-0002.png']);
+    const frame = decodePng(zipped['frame-0001.png']!);
+    expect([frame.width, frame.height]).toEqual([200, 250]);
+    // Transparent around the character, and the character is there.
+    expect(frame.pixels[3]).toBe(0);
+    expect(alphaBounds(frame)!.height).toBeGreaterThan(150);
+
+    expect(wrongName!.error).toMatch(/saved as .mp4, .gif or .zip/);
+    expect(noClip!.error).toMatch(/add "clip": true/);
+  }, 180_000);
 });

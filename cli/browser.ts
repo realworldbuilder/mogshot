@@ -30,14 +30,14 @@ export class Darkroom {
     return room;
   }
 
-  /** Draw a packed job. Returns the PNG and what the page said about it. */
-  async shoot(job: Uint8Array): Promise<Drawn & { png: Buffer }> {
+  /** Draw a packed job. Returns the PNG or the clip, and what the page said about it. */
+  async shoot(job: Uint8Array): Promise<Drawn & { file: Buffer }> {
     this.job = job;
     this.picture = undefined;
     const drawn = await this.page.evaluate(() => window.mogshot!.shoot());
     this.job = undefined;
     if (!this.picture) throw new Error('The page drew the picture but did not hand it over');
-    return { ...drawn, png: this.picture };
+    return { ...drawn, file: this.picture };
   }
 
   async close(): Promise<void> {

@@ -5,6 +5,7 @@ import type { PoseRequest } from '../src/character/scene';
 import { decodeRecord, type ImportedRecord } from '../src/import/record';
 import { resolveImport } from '../src/import/resolve';
 import { type Backdrop, GRADIENTS, NO_BACKDROP } from '../src/render/backdrop';
+import { CLIP_FPS, type ClipFormat, clipSize, evenSize, GIF_FPS } from '../src/render/clip';
 import { type Camera, DEFAULT_CAMERA } from '../src/render/renderer';
 
 /*
@@ -16,7 +17,7 @@ import { type Camera, DEFAULT_CAMERA } from '../src/render/renderer';
 export type ChoiceRef = string | number | { id: number };
 
 export interface Spec {
-  /** Where the PNG goes, relative to the spec file. */
+  /** Where the PNG goes, relative to the spec file. A clip's ending picks its kind: .mp4, .gif, or .zip for PNG frames. */
   out?: string;
   /** A character the addon captured (`Rambleon`, `Rambleon-Realm`) or a pasted `MOG…` code: the starting point. */
   character?: string;
@@ -31,6 +32,11 @@ export interface Spec {
   /** A curated pose by name, or a moment of an animation (`at` is 0..1 through it). */
   pose?: string | { animation: string; at?: number } | { animationId: number; variation?: number; time?: number };
   /** Angles in degrees. */
+  /**
+   * A looping clip instead of a picture: one pass of the pose's animation (or the one named),
+   * or `seconds` of it going round. 30 frames a second unless said; a GIF is always 25.
+   */
+  clip?: true | { animation?: string; seconds?: number; fps?: number };
   camera?: Partial<Camera>;
   size?: string | { width: number; height: number; tight?: boolean };
   backdrop?:
@@ -68,6 +74,8 @@ export interface Shot {
   pose: PoseRequest;
   /** An animation asked for by name, found once the model is read. */
   animation?: { name: string; at: number };
+  /** A clip to film instead of a picture to take. */
+  clip?: { format: ClipFormat; animation?: string; seconds?: number; fps: number };
   camera: Camera;
   size: PictureSize;
   backdrop: Backdrop;
@@ -197,6 +205,34 @@ function sizeOf(ref: Spec['size']): PictureSize {
   return { width, height, tight: ref.tight ?? false };
 }
 
+const CLIP_ENDINGS: Record<string, ClipFormat> = { mp4: 'mp4', gif: 'gif', zip: 'frames' };
+
+/** The kind of clip a file name asks for, or undefined for a picture. */
+export function clipFormatOf(out: string | undefined): ClipFormat | undefined {
+  return CLIP_ENDINGS[out?.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? ''];
+}
+
+function clipOf(spec: Spec): Shot['clip'] {
+  const format = clipFormatOf(spec.out);
+  if (!spec.clip) {
+    if (format) throw new Error(`"${spec.out}" is a clip's file name; add "clip": true to film one`);
+    return undefined;
+  }
+  if (spec.out !== undefined && !format) throw new Error(`A clip is saved as .mp4, .gif or .zip (PNG frames), not "${spec.out}"`);
+  const { animation, seconds, fps } = spec.clip === true ? {} : spec.clip;
+  if (seconds !== undefined && !(seconds > 0 && seconds <= 60)) throw new Error('A clip is between 0 and 60 seconds long');
+  if (fps !== undefined && !(fps >= 1 && fps <= 60)) throw new Error('A clip has 1 to 60 frames a second');
+  const kind = format ?? 'mp4';
+  return { format: kind, animation, seconds, fps: kind === 'gif' ? GIF_FPS : (fps ?? CLIP_FPS) };
+}
+
+/** A clip's size: a square unless said; a named size keeps its shape at video size; numbers are used as given. */
+function clipSizeOf(ref: Spec['size'], format: ClipFormat): PictureSize {
+  const asked = sizeOf(ref ?? 'square');
+  const size = typeof ref === 'object' ? evenSize(asked.width, asked.height) : clipSize(asked, format === 'gif');
+  return { ...size, tight: false };
+}
+
 const radians = (degrees: number) => (degrees * Math.PI) / 180;
 
 function cameraOf(ref: Spec['camera']): Camera {
@@ -261,6 +297,8 @@ export function resolveSpec(spec: Spec, world: World): Shot {
   else if (spec.pose && 'animation' in spec.pose) animation = { name: spec.pose.animation, at: spec.pose.at ?? 0 };
   else if (spec.pose) pose = { animationId: spec.pose.animationId, variation: spec.pose.variation ?? 0, time: spec.pose.time ?? 0 };
 
+  const clip = clipOf(spec);
+
   return {
     raceId: race.id,
     sex,
@@ -268,8 +306,9 @@ export function resolveSpec(spec: Spec, world: World): Shot {
     gear,
     pose,
     animation,
+    clip,
     camera: cameraOf(spec.camera),
-    size: sizeOf(spec.size),
+    size: clip ? clipSizeOf(spec.size, clip.format) : sizeOf(spec.size),
     ...backdropOf(spec.backdrop, world.screens),
     problems,
     notes,
