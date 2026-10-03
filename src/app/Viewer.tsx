@@ -6,6 +6,7 @@ import type { AnimationInfo, PoseInfo, PoseRequest } from '../character/scene';
 import type { ImportedRecord } from '../import/record';
 import type { ImportResult } from '../import/resolve';
 import { type Backdrop, backdropImage, slug } from '../render/backdrop';
+import { CLIP_FPS, CLIP_FORMATS, type ClipFormat, clipSize, clipTimes, encodeClip, GIF_FPS } from '../render/clip';
 import { encodePng, unpremultiply } from '../render/export';
 import { type Camera, CharacterRenderer, DEFAULT_CAMERA } from '../render/renderer';
 import type { LoadingScreen, Race } from '../worker/api';
@@ -14,7 +15,7 @@ import { messageOf } from './App';
 import { BackdropControls, backdropName, compose, drawable, type LoadScreen, screenProblem, useScreen } from './BackdropControls';
 import { GearPanel } from './GearPanel';
 import { ImportPanel } from './ImportPanel';
-import { downloadPng, previewSize, savedNote, type Size, SIZES } from './sizes';
+import { downloadFile, downloadPng, previewSize, savedNote, type Size, SIZES } from './sizes';
 
 const SEX_NAMES = ['Male', 'Female'];
 
@@ -129,6 +130,8 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
   const [error, setError] = useState<string>();
   const [exportNote, setExportNote] = useState<{ text: string; bad: boolean }>();
   const [exporting, setExporting] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [clipFormat, setClipFormat] = useState<ClipFormat>('mp4');
   // The backdrop as drawn behind the preview, kept to give a renderer created later.
   const backdropSource = useRef<ReturnType<typeof compose>>(undefined);
 
@@ -299,6 +302,7 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
 
   /** Move the character on screen to a moment of one of its animations. */
   const poseAt = (sequence: number, time: number, remember: PoseRequest) => {
+    setPlaying(false);
     poseRequest.current = remember;
     const send = async (next: { sequence: number; time: number }) => {
       posing.current.busy = true;
@@ -326,7 +330,65 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
     const target = shown?.animations.find((a) => a.sequence === sequence);
     if (target) poseAt(sequence, time, { animationId: target.id, variation: target.variation, time });
   };
-
+  // Playing: the animation on screen runs in a loop from where it is, with the camera held
+  // on the animation's first moment so the view does not breathe with the pose.
+  const playingSequence = playing ? pose?.sequence : undefined;
+  useEffect(() => {
+    const view = renderer.current;
+    const duration = pose?.duration ?? 0;
+    if (playingSequence === undefined || !view || duration <= 0) return;
+    let stopped = false;
+    let busy = false;
+    let frame = 0;
+    let shownAt = 0;
+    let last: number | undefined;
+    const offset = pose?.time ?? 0;
+    const start = performance.now();
+    const tick = async () => {
+      if (stopped) return;
+      frame = requestAnimationFrame(() => void tick());
+      if (busy) return;
+      busy = true;
+      try {
+        const now = performance.now();
+        const result = await data.pose(playingSequence, (offset + now - start) % duration);
+        if (stopped) return;
+        view.setPose(result);
+        redraw();
+        last = result.pose.time;
+        // The slider follows a few times a second; redrawing the whole panel every frame would cost frames.
+        if (now - shownAt > 100) {
+          shownAt = now;
+          setPose((current) => current && { ...current, time: result.pose.time });
+        }
+      } catch (cause) {
+        setError(messageOf(cause));
+        setPlaying(false);
+      } finally {
+        busy = false;
+      }
+    };
+    void data
+      .pose(playingSequence, 0)
+      .then((first) => {
+        if (stopped) return;
+        view.holdFraming(first.bounds);
+        void tick();
+      })
+      .catch((cause) => {
+        setError(messageOf(cause));
+        setPlaying(false);
+      });
+    return () => {
+      stopped = true;
+      cancelAnimationFrame(frame);
+      view.holdFraming(undefined);
+      redraw();
+      // The slider ends on the moment the picture stopped at.
+      const time = last;
+      if (time !== undefined) setPose((current) => (current?.sequence === playingSequence ? { ...current, time } : current));
+    };
+  }, [playingSequence, data, shown?.drawn]);
 
   /** The picture as PNG bytes, at the chosen size. With a backdrop the whole preview is saved, uncropped. */
   const picture = async () => {
@@ -361,6 +423,57 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
     } catch (cause) {
       setExportNote({ bad: true, text: `The picture could not be ${how === 'copy' ? 'copied' : 'exported'}: ${messageOf(cause)}` });
     } finally {
+      setExporting(false);
+    }
+  };
+
+  /** Save the animation on screen as a clip: one pass of it, which loops without a seam. */
+  const saveClip = async () => {
+    const view = renderer.current;
+    if (!view || !race || !character || !pose || pose.duration <= 0) return;
+    setPlaying(false);
+    setExporting(true);
+    const start = performance.now();
+    const { sequence, time } = pose;
+    const fps = clipFormat === 'gif' ? GIF_FPS : CLIP_FPS;
+    const { width, height } = clipSize(size.tight ? preview : size, clipFormat === 'gif');
+    const times = clipTimes(pose.duration, fps);
+    try {
+      if (hasBackdrop) view.setBackdrop(composeAt(width, height));
+      view.holdFraming((await data.pose(sequence, 0)).bounds);
+      const bytes = await encodeClip({
+        format: clipFormat,
+        width,
+        height,
+        fps,
+        frames: times.length,
+        frame: async (i) => {
+          view.setPose(await data.pose(sequence, times[i]!));
+          return view.renderImage(camera.current, { longSide: Math.max(width, height), aspect: width / height, tight: false });
+        },
+        onProgress: (done, of) => setExportNote({ bad: false, text: `Drawing frame ${done} of ${of}…` }),
+      });
+      const { extension, type } = CLIP_FORMATS[clipFormat];
+      downloadFile(bytes, `mogshot-${slug(`${race.name} ${SEX_NAMES[character.sex]} ${animation?.name ?? ''}`)}.${extension}`, type);
+      setExportNote({
+        bad: false,
+        text:
+          `Saved ${times.length} frames, ${(pose.duration / 1000).toFixed(1)} s at ${fps} a second, ${width} × ${height} ` +
+          `(${(bytes.length / 1024 / 1024).toFixed(1)} MB) in ${((performance.now() - start) / 1000).toFixed(1)} s.` +
+          (clipFormat !== 'frames' && !hasBackdrop ? ' With no backdrop the background is black; PNG frames keep it transparent.' : ''),
+      });
+    } catch (cause) {
+      setExportNote({ bad: true, text: `The clip could not be exported: ${messageOf(cause)}` });
+    } finally {
+      // Back to what was on screen.
+      view.holdFraming(undefined);
+      if (hasBackdrop) view.setBackdrop(backdropSource.current);
+      try {
+        view.setPose(await data.pose(sequence, time));
+      } catch {
+        // The export's own error has been shown.
+      }
+      redraw();
       setExporting(false);
     }
   };
@@ -430,6 +543,15 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
                 ))}
               </div>
               <div class="scrub">
+                <button
+                  class={playing ? 'plain on' : 'plain'}
+                  id="play"
+                  aria-pressed={playing}
+                  disabled={!animation || exporting}
+                  onClick={() => setPlaying(!playing)}
+                >
+                  {playing ? 'Pause' : 'Play'}
+                </button>
                 <select
                   id="animation"
                   aria-label="Animation"
@@ -517,6 +639,24 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
                   Backdrop only
                 </button>
               )}
+            </div>
+            <div class="actions">
+              <select
+                id="clip-format"
+                aria-label="Clip format"
+                value={clipFormat}
+                onChange={(event) => setClipFormat(event.currentTarget.value as ClipFormat)}
+              >
+                {(Object.keys(CLIP_FORMATS) as ClipFormat[]).map((format) => (
+                  <option value={format}>{CLIP_FORMATS[format].name}</option>
+                ))}
+              </select>
+              <button class="plain" id="download-clip" disabled={exporting || !shown || !animation} onClick={saveClip}>
+                Download clip
+              </button>
+              <span class="dim small">
+                {animation ? `${animation.name}, ${((pose?.duration ?? 0) / 1000).toFixed(1)} s, looping` : ''}
+              </span>
             </div>
             <p class={`${exportNote?.bad ? 'bad' : 'dim'} small`} id="export-note">
               {exportNote?.text ??

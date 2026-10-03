@@ -190,7 +190,8 @@ button.plain {
   cursor: pointer;
 }
 
-.presets button.on {
+.presets button.on,
+button.plain.on {
   border-color: var(--accent);
   color: var(--accent);
 }

@@ -346,6 +346,49 @@ test('scrubs through any animation', async ({ page }) => {
   expect(await problemsShown(page)).toEqual([]);
 });
 
+test('plays an animation and saves it as a clip', async ({ page }) => {
+  await load(page, false);
+  await openAndDraw(page);
+  await page.locator('#size').selectOption('youtube');
+  await repose(page, () => page.locator('#animation').selectOption({ label: 'EmoteDance' }));
+  const canvas = page.locator('#canvas');
+
+  // Playing moves the pose on without anything being touched; pausing holds it.
+  await page.locator('#play').click();
+  const seen = new Set<string>();
+  await expect.poll(async () => seen.add((await canvas.getAttribute('data-pose'))!).size, { timeout: 10_000 }).toBeGreaterThan(3);
+  await page.locator('#play').click();
+  await expect(page.locator('#play')).toHaveText('Play');
+  // The slider settles on the moment the picture stopped at.
+  await page.waitForTimeout(300);
+  const held = await canvas.getAttribute('data-pose');
+  await page.waitForTimeout(500);
+  expect(await canvas.getAttribute('data-pose')).toBe(held);
+
+  const save = async (format: string, name: string) => {
+    await page.locator('#clip-format').selectOption(format);
+    const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#download-clip').click()]);
+    expect(download.suggestedFilename()).toBe(name);
+    await download.saveAs(`test-results/${name}`);
+    await expect(page.locator('#export-note')).toContainText('Saved');
+    console.log(format, await page.locator('#export-note').innerText());
+    return readFileSync(`test-results/${name}`);
+  };
+  const video = await save('mp4', 'mogshot-human-male-emotedance.mp4');
+  expect(video.subarray(4, 8).toString('latin1')).toBe('ftyp');
+  expect(video.includes('avc1')).toBe(true);
+  const gif = await save('gif', 'mogshot-human-male-emotedance.gif');
+  expect(gif.subarray(0, 6).toString('latin1')).toBe('GIF89a');
+  expect([gif.readUInt16LE(6), gif.readUInt16LE(8)]).toEqual([800, 450]);
+  const zip = await save('frames', 'mogshot-human-male-emotedance.zip');
+  expect(zip.subarray(0, 2).toString('latin1')).toBe('PK');
+
+  // The page is back on the moment it was paused at, and nothing is wrong.
+  await page.locator('.viewer > div').first().screenshot({ path: 'test-results/clip-controls.png' });
+  expect(await canvas.getAttribute('data-pose')).toBe(held);
+  expect(await problemsShown(page)).toEqual([]);
+});
+
 test('turns, zooms and resets the camera', async ({ page }) => {
   await load(page, false);
   await openAndDraw(page);

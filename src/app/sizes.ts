@@ -17,8 +17,12 @@ export function previewSize(size: { width: number; height: number }): { width: n
 
 /** Save PNG bytes as a file. */
 export function downloadPng(png: Uint8Array, name: string): void {
+  downloadFile(png, name, 'image/png');
+}
+
+export function downloadFile(bytes: Uint8Array, name: string, type: string): void {
   const link = document.createElement('a');
-  link.href = URL.createObjectURL(new Blob([png as BlobPart], { type: 'image/png' }));
+  link.href = URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
   link.download = name;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
