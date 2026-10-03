@@ -7,7 +7,8 @@ import { PLACE_VERTEX_SIZE, type PlaceDraw, type PlaceScene, type TerrainMesh } 
 import { combiners } from './shader-table';
 import {
   BACKDROP_FRAGMENT_SOURCE, BACKDROP_VERTEX_SOURCE, DOWNSAMPLE_FRAGMENT_SOURCE, DOWNSAMPLE_VERTEX_SOURCE, FRAGMENT_SOURCE,
-  PLACE_FRAGMENT_SOURCE, PLACE_VERTEX_SOURCE, TERRAIN_FRAGMENT_SOURCE, VERTEX_SOURCE,
+  FOCUS_FRAGMENT_SOURCE, PLACE_FRAGMENT_SOURCE, PLACE_VERTEX_SOURCE, SKY_FRAGMENT_SOURCE, SKY_VERTEX_SOURCE, TERRAIN_FRAGMENT_SOURCE,
+  VERTEX_SOURCE,
 } from './shaders';
 
 /** Where the camera is, as an orbit around the character. Angles in radians. */
@@ -65,6 +66,8 @@ interface CameraAxes {
   toCamera: readonly [number, number, number];
   right: readonly [number, number, number];
   up: readonly [number, number, number];
+  /** Tangents of half the field of view, across and up. */
+  tan: readonly [number, number];
 }
 
 interface PreparedDraw {
@@ -94,8 +97,12 @@ interface GpuPlace {
   reach: number;
 }
 
-/** The haze the world fades into, and the sky where nothing is drawn. */
-const HAZE = [0.62, 0.71, 0.8] as const;
+/** The haze the world fades into and the sky meets the horizon in, and the sky overhead. */
+const HAZE = [0.66, 0.74, 0.82] as const;
+const ZENITH = [0.27, 0.47, 0.76] as const;
+
+/** The widest the depth-of-field blur gets at full strength, as a part of the picture's height. */
+const FOCUS_BLUR = 0.014;
 
 /** Toward a mid-morning sun, in the character's space. */
 const SUN = /* @__PURE__ */ (() => {
@@ -127,6 +134,11 @@ export class CharacterRenderer {
   private backdrop: WebGLTexture | undefined;
   private readonly placeProgram: WebGLProgram;
   private readonly terrainProgram: WebGLProgram;
+  private readonly skyProgram: WebGLProgram;
+  private readonly focusProgram: WebGLProgram;
+  private readonly shadowQuad: WebGLVertexArrayObject;
+  /** How strongly the world behind the character is blurred, 0 to 1. Only a place has depth to blur. */
+  private focus = 0.5;
   private place: GpuPlace | undefined;
   private readonly uniforms = {} as Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>;
   private readonly white: WebGLTexture;
@@ -150,6 +162,23 @@ export class CharacterRenderer {
     this.backdropProgram = link(gl, BACKDROP_VERTEX_SOURCE, BACKDROP_FRAGMENT_SOURCE);
     this.placeProgram = link(gl, PLACE_VERTEX_SOURCE, PLACE_FRAGMENT_SOURCE);
     this.terrainProgram = link(gl, PLACE_VERTEX_SOURCE, TERRAIN_FRAGMENT_SOURCE);
+    this.skyProgram = link(gl, SKY_VERTEX_SOURCE, SKY_FRAGMENT_SOURCE);
+    this.focusProgram = link(gl, DOWNSAMPLE_VERTEX_SOURCE, FOCUS_FRAGMENT_SOURCE);
+
+    // A flat square from -1 to 1 for the character's shadow, laid out as a place's vertices.
+    const corners = new Float32Array(4 * (PLACE_VERTEX_SIZE / 4));
+    [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([x, y], i) => corners.set([x!, y!, 0, 0, 0, 1, (x! + 1) / 2, (y! + 1) / 2], i * (PLACE_VERTEX_SIZE / 4)));
+    this.shadowQuad = gl.createVertexArray()!;
+    gl.bindVertexArray(this.shadowQuad);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, corners, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, PLACE_VERTEX_SIZE, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, PLACE_VERTEX_SIZE, 12);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 2, gl.FLOAT, false, PLACE_VERTEX_SIZE, 24);
+    gl.bindVertexArray(null);
     for (const name of UNIFORMS) this.uniforms[name] = gl.getUniformLocation(this.program, name);
 
     this.white = gl.createTexture()!;
@@ -270,6 +299,11 @@ export class CharacterRenderer {
     this.backdrop = texture;
   }
 
+  /** How strongly the world behind the character is blurred in a place: 0 for none, 1 for the most. */
+  setFocus(strength: number): void {
+    this.focus = Math.min(1, Math.max(0, strength));
+  }
+
   /** The world drawn around the character, or none. The character stands at the place's spot. */
   setPlace(place: PlaceScene | undefined): void {
     const { gl } = this;
@@ -362,6 +396,11 @@ export class CharacterRenderer {
   /** Draw the scene to the canvas. The canvas's pixel size is used as it is. */
   render(camera: Camera = DEFAULT_CAMERA): void {
     const { gl, canvas } = this;
+    if (this.place) {
+      // A place is drawn to a picture first, so that its depth can be read to blur the distance.
+      this.drawOffscreen(camera, canvas.width / canvas.height, FULL_FRAME, canvas.width, canvas.height, 1, true);
+      return;
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     const { view, projection, axes } = this.cameraMatrices(camera, canvas.width / canvas.height);
     this.draw(view, projection, axes, FULL_FRAME, canvas.width, canvas.height);
@@ -405,20 +444,25 @@ export class CharacterRenderer {
     return this.drawOffscreen(camera, aspect, frame, width, height);
   }
 
-  /** Render the part of the camera's view inside `frame` to a width x height image. */
-  private drawOffscreen(camera: Camera, aspect: number, frame: Frame, width: number, height: number): Image {
+  /**
+   * Render the part of the camera's view inside `frame` to a width x height image, each
+   * pixel the average of up to `detail` x `detail` samples; or straight onto the canvas.
+   */
+  private drawOffscreen(camera: Camera, aspect: number, frame: Frame, width: number, height: number): Image;
+  private drawOffscreen(camera: Camera, aspect: number, frame: Frame, width: number, height: number, detail: number, toCanvas: true): undefined;
+  private drawOffscreen(camera: Camera, aspect: number, frame: Frame, width: number, height: number, detail = 3, toCanvas = false): Image | undefined {
     const { gl } = this;
     const limit = Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE)) as number;
     if (width > limit || height > limit) throw new Error(`This graphics card cannot draw a picture larger than ${limit} pixels`);
     // Supersample as much as fits: each output pixel is the average of factor x factor samples.
-    let factor = 3;
+    let factor = detail;
     while (factor > 1 && (width * factor > limit || height * factor > limit || width * height * factor * factor > MAX_SAMPLES)) factor--;
     const bigWidth = width * factor;
     const bigHeight = height * factor;
     let samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number);
     while (samples > 1 && bigWidth * bigHeight * samples > MAX_SAMPLES) samples >>= 1;
 
-    const { view, projection, axes } = this.cameraMatrices(camera, aspect);
+    const { view, projection, axes, near, far, distance } = this.cameraMatrices(camera, aspect);
     // Zoom the projection so that `frame` (in the full view's -1..1 coordinates) fills the picture.
     const sx = 2 / (frame.x1 - frame.x0);
     const sy = 2 / (frame.y1 - frame.y0);
@@ -436,6 +480,9 @@ export class CharacterRenderer {
     const resolveBuffer = gl.createFramebuffer();
     const output = gl.createTexture();
     const outputBuffer = gl.createFramebuffer();
+    const depthTexture = gl.createTexture();
+    const focused = gl.createTexture();
+    const focusedBuffer = gl.createFramebuffer();
     try {
       gl.bindRenderbuffer(gl.RENDERBUFFER, color);
       gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.RGBA8, bigWidth, bigHeight);
@@ -459,9 +506,20 @@ export class CharacterRenderer {
       };
       // Resolve the multisampled buffer, then average it down to the output size.
       target(resolved, resolveBuffer, bigWidth, bigHeight);
+      const place = this.place !== undefined;
+      if (place) {
+        // The depth comes along, to tell the blur how far away each pixel is.
+        gl.bindTexture(gl.TEXTURE_2D, depthTexture);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.DEPTH_COMPONENT24, bigWidth, bigHeight);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depthTexture, 0);
+      }
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, drawBuffer);
       gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, resolveBuffer);
-      gl.blitFramebuffer(0, 0, bigWidth, bigHeight, 0, 0, bigWidth, bigHeight, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.blitFramebuffer(0, 0, bigWidth, bigHeight, 0, 0, bigWidth, bigHeight, gl.COLOR_BUFFER_BIT | (place ? gl.DEPTH_BUFFER_BIT : 0), gl.NEAREST);
 
       target(output, outputBuffer, width, height);
       gl.viewport(0, 0, width, height);
@@ -475,6 +533,33 @@ export class CharacterRenderer {
       gl.uniform1i(gl.getUniformLocation(this.downsample, 'u_factor'), factor);
       gl.bindVertexArray(null);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+      if (place) {
+        // Blur by distance, into a last picture or onto the canvas.
+        if (toCanvas) gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        else target(focused, focusedBuffer, width, height);
+        const { focusProgram } = this;
+        const at = (name: string) => gl.getUniformLocation(focusProgram, name);
+        gl.useProgram(focusProgram);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, depthTexture);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, output);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.uniform1i(at('u_color'), 0);
+        gl.uniform1i(at('u_depth'), 1);
+        gl.uniform2f(at('u_size'), width, height);
+        gl.uniform1f(at('u_near'), near);
+        gl.uniform1f(at('u_far'), far);
+        gl.uniform1f(at('u_focus'), distance);
+        gl.uniform1f(at('u_blur'), this.focus * FOCUS_BLUR * height);
+        gl.viewport(0, 0, width, height);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+      if (toCanvas) return undefined;
 
       const bottomUp = new Uint8Array(width * height * 4);
       gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, bottomUp);
@@ -493,6 +578,9 @@ export class CharacterRenderer {
       gl.deleteRenderbuffer(depth);
       gl.deleteTexture(resolved);
       gl.deleteTexture(output);
+      gl.deleteTexture(depthTexture);
+      gl.deleteTexture(focused);
+      gl.deleteFramebuffer(focusedBuffer);
     }
   }
 
@@ -517,7 +605,10 @@ export class CharacterRenderer {
       gl.bindVertexArray(null);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
-    if (this.place) this.drawPlace(this.place, view, projection);
+    if (this.place) {
+      if (!this.backdrop) this.drawSky(axes, frame);
+      this.drawPlace(this.place, view, projection);
+    }
     if (this.draws.length === 0 && !this.place) return;
 
     gl.useProgram(this.program);
@@ -558,10 +649,18 @@ export class CharacterRenderer {
       }
     }
 
-    // A light from in front of and above the character, slightly to one side, fixed to the camera.
-    gl.uniform3f(uniforms.u_ambient, 0.55, 0.55, 0.55);
-    gl.uniform3f(uniforms.u_light_color, 0.6, 0.6, 0.6);
-    gl.uniform3f(uniforms.u_light_direction, 0.35, -0.5, -0.8);
+    if (this.place) {
+      // In a place the character is lit by its sun, with the shade filled in so the dark side still reads.
+      const sun = transformDirection(view, SUN);
+      gl.uniform3f(uniforms.u_ambient, 0.62, 0.63, 0.66);
+      gl.uniform3f(uniforms.u_light_color, 0.55, 0.52, 0.46);
+      gl.uniform3f(uniforms.u_light_direction, -sun[0], -sun[1], -sun[2]);
+    } else {
+      // A light from in front of and above the character, slightly to one side, fixed to the camera.
+      gl.uniform3f(uniforms.u_ambient, 0.55, 0.55, 0.55);
+      gl.uniform3f(uniforms.u_light_color, 0.6, 0.6, 0.6);
+      gl.uniform3f(uniforms.u_light_direction, 0.35, -0.5, -0.8);
+    }
     gl.uniform1f(uniforms.u_reach, 0);
     for (const mesh of this.meshes) this.aimBillboards(mesh, axes);
     for (const draw of this.draws) this.drawBatch(draw, this.textures);
@@ -595,6 +694,25 @@ export class CharacterRenderer {
       gl.bindTexture(gl.TEXTURE_2D, textures[draw.textures[stage] ?? -1] ?? this.white);
     }
     gl.drawElements(gl.TRIANGLES, draw.indexCount, gl.UNSIGNED_SHORT, draw.indexStart * 2);
+  }
+
+  /** Fill the frame with the sky as the camera sees it. */
+  private drawSky(axes: CameraAxes, frame: Frame): void {
+    const { gl, skyProgram } = this;
+    const at = (name: string) => gl.getUniformLocation(skyProgram, name);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.CULL_FACE);
+    gl.useProgram(skyProgram);
+    gl.uniform4f(at('u_frame'), frame.x0, frame.y0, frame.x1, frame.y1);
+    gl.uniform3f(at('u_forward'), -axes.toCamera[0], -axes.toCamera[1], -axes.toCamera[2]);
+    gl.uniform3f(at('u_right'), axes.right[0], axes.right[1], axes.right[2]);
+    gl.uniform3f(at('u_up'), axes.up[0], axes.up[1], axes.up[2]);
+    gl.uniform2f(at('u_tan'), axes.tan[0], axes.tan[1]);
+    gl.uniform3f(at('u_haze'), HAZE[0], HAZE[1], HAZE[2]);
+    gl.uniform3f(at('u_zenith'), ZENITH[0], ZENITH[1], ZENITH[2]);
+    gl.bindVertexArray(null);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
   /** Draw the ground of a place. */
@@ -666,6 +784,22 @@ export class CharacterRenderer {
       if (blended) {
         gl.enable(gl.BLEND);
         gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        // The character's shadow lies on the solid ground, under any water or glass.
+        if (this.draws.length > 0) {
+          const { min, max } = this.framing ?? this.bounds;
+          const radius = Math.max(max[0] - min[0], max[1] - min[1]) * 0.6;
+          const shadow = new Float32Array([radius, 0, 0, 0, 0, radius, 0, 0, 0, 0, 1, 0, (min[0] + max[0]) / 2, (min[1] + max[1]) / 2, 0, 1]);
+          gl.bindVertexArray(this.shadowQuad);
+          gl.uniformMatrix4fv(model, false, shadow);
+          gl.uniform1i(at('u_shadow'), 1);
+          gl.disable(gl.CULL_FACE);
+          // Lifted a little toward the camera so it does not flicker against the ground it lies on.
+          gl.enable(gl.POLYGON_OFFSET_FILL);
+          gl.polygonOffset(-2, -8);
+          gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+          gl.disable(gl.POLYGON_OFFSET_FILL);
+          gl.uniform1i(at('u_shadow'), 0);
+        }
       } else gl.disable(gl.BLEND);
       for (const mesh of place.meshes) {
         gl.bindVertexArray(mesh.vao);
@@ -796,7 +930,7 @@ export class CharacterRenderer {
     const near = Math.max(0.02, (distance - nearest) * 0.5);
     // With a world around, the view reaches as far as the world is drawn.
     const far = Math.max((distance - farthest) * 1.5 + 1, this.place ? distance + this.place.reach : 0);
-    return { view, projection: perspective(camera.fov, aspect, near, far), axes: { toCamera, right, up } };
+    return { view, projection: perspective(camera.fov, aspect, near, far), axes: { toCamera, right, up, tan: [tanX, tanY] as const }, near, far, distance };
   }
 }
 

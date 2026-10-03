@@ -324,6 +324,7 @@ uniform int u_blend_mode;
 uniform bool u_outdoors;
 uniform bool u_baked;
 uniform bool u_water;
+uniform bool u_shadow;
 uniform bool u_unlit;
 // The sun's direction in the character's space, and the colours of sun, sky and haze.
 uniform vec3 u_sun_direction;
@@ -335,6 +336,12 @@ uniform float u_reach;
 out vec4 out_color;
 
 void main() {
+  if (u_shadow) {
+    // The soft shadow under the character: darkest under the feet, gone at its edge.
+    float fade = 1.0 - smoothstep(0.15, 1.0, length(v_texcoord * 2.0 - 1.0));
+    out_color = vec4(0.0, 0.0, 0.0, 0.5 * fade);
+    return;
+  }
   vec4 texel = texture(u_texture, v_texcoord);
   if (u_blend_mode == 1 && texel.a < 0.5) discard;
   vec3 normal = normalize(gl_FrontFacing ? v_normal : -v_normal);
@@ -394,5 +401,90 @@ void main() {
   color *= light * v_baked.rgb * 2.0;
   color = mix(color, u_haze, smoothstep(u_reach * 0.25, u_reach, v_distance));
   out_color = vec4(color, 1.0);
+}
+`;
+
+/** The sky of a place: haze at the horizon, blue overhead. `u_frame` as for the backdrop. */
+export const SKY_VERTEX_SOURCE = `#version 300 es
+uniform vec4 u_frame;
+out vec2 v_view;
+void main() {
+  vec2 corner = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+  v_view = u_frame.xy + corner * (u_frame.zw - u_frame.xy);
+}
+`;
+
+export const SKY_FRAGMENT_SOURCE = `#version 300 es
+precision highp float;
+in vec2 v_view;
+// The camera's directions in the world, and the tangents of half its field of view.
+uniform vec3 u_forward;
+uniform vec3 u_right;
+uniform vec3 u_up;
+uniform vec2 u_tan;
+uniform vec3 u_haze;
+uniform vec3 u_zenith;
+out vec4 frag_color;
+void main() {
+  vec3 ray = normalize(u_forward + u_right * v_view.x * u_tan.x + u_up * v_view.y * u_tan.y);
+  float rise = clamp(ray.z, 0.0, 1.0);
+  frag_color = vec4(mix(u_haze, u_zenith, pow(rise, 0.6)), 1.0);
+}
+`;
+
+/**
+ * Depth of field for a place: each pixel is blurred by how far it is from the distance the
+ * character stands at, so the character is sharp and the world behind softens. One pass,
+ * gathering from a disc; a sample only counts if its own blur reaches the pixel.
+ */
+export const FOCUS_FRAGMENT_SOURCE = `#version 300 es
+precision highp float;
+uniform sampler2D u_color;
+uniform sampler2D u_depth;
+uniform vec2 u_size;
+uniform float u_near;
+uniform float u_far;
+uniform float u_focus;
+// The largest blur, in pixels.
+uniform float u_blur;
+out vec4 frag_color;
+
+float distance_at(vec2 uv) {
+  float depth = texture(u_depth, uv).r * 2.0 - 1.0;
+  return 2.0 * u_near * u_far / (u_far + u_near - depth * (u_far - u_near));
+}
+
+float blur_at(float distance) {
+  // Nothing within a stride of the character, then growing toward the horizon.
+  float behind = max(distance - u_focus * 1.15, 0.0) / distance;
+  float before = max(u_focus * 0.8 - distance, 0.0) / u_focus;
+  return u_blur * clamp(max(behind * 1.6, before * 2.0), 0.0, 1.0);
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_size;
+  vec4 sum = texture(u_color, uv);
+  if (u_blur <= 0.0) {
+    frag_color = sum;
+    return;
+  }
+  float here = distance_at(uv);
+  float blur = blur_at(here);
+  float total = 1.0;
+  const int TAPS = 56;
+  for (int i = 1; i <= TAPS; i++) {
+    float reach = u_blur * sqrt(float(i) / float(TAPS));
+    float turn = float(i) * 2.39996323;
+    vec2 at = uv + vec2(cos(turn), sin(turn)) * reach / u_size;
+    float there = distance_at(at);
+    float spread = blur_at(there);
+    // What is behind this pixel cannot smear over it further than this pixel is itself blurred.
+    if (there > here) spread = min(spread, blur * 2.0);
+    float weight = smoothstep(reach - 1.0, reach + 1.0, spread);
+    sum += texture(u_color, at) * weight;
+    total += weight;
+  }
+  frag_color = sum / total;
 }
 `;
