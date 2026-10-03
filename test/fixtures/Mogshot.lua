@@ -36,6 +36,12 @@ nil, -- [2]
 ["gear"] = {
 ["chest"] = 12640,
 },
+["items"] = {
+[12640] = {
+["name"] = "Lionheart \"Helm\"",
+["quality"] = 4,
+},
+},
 },
 ["Old-Realm"] = {
 ["v"] = 99,

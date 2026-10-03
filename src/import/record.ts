@@ -32,6 +32,11 @@ export interface ImportedRecord {
   gear: Partial<Record<ImportSlot, number>>;
   /** Appearance choices as the game numbers them: option id and choice id. */
   choices: [number, number][];
+  /**
+   * What the game called each worn item, and its quality, by item id. The game files have
+   * no name for many items (the server supplies them), so the addon passes them along.
+   */
+  items?: Record<number, { name: string; quality: number }>;
   /** When the addon captured the record, as a Unix time in seconds, or 0 if unknown. */
   captured: number;
 }
@@ -52,6 +57,8 @@ function splitKey(key: string): { name: string; realm: string } {
 export function encodeRecord(record: ImportedRecord): string {
   const gear = IMPORT_SLOTS.filter((slot) => record.gear[slot]).map((slot) => `${slot}:${record.gear[slot]}`);
   const choices = record.choices.map(([option, choice]) => `${option}:${choice}`);
+  // Names are percent-encoded, so no separator can appear in one.
+  const items = Object.entries(record.items ?? {}).map(([id, item]) => `${id}:${item.quality}:${encodeURIComponent(item.name)}`);
   return [
     CODE_TAG,
     record.key,
@@ -63,6 +70,7 @@ export function encodeRecord(record: ImportedRecord): string {
     record.captured || '',
     gear.join(','),
     choices.join(','),
+    ...(items.length > 0 ? [items.join(',')] : []),
   ].join(';');
 }
 
@@ -70,7 +78,7 @@ export function encodeRecord(record: ImportedRecord): string {
 export function decodeRecord(text: string): ImportedRecord | undefined {
   const fields = text.trim().split(';');
   if (fields[0] !== CODE_TAG || fields.length < 10) return undefined;
-  const [, key = '', race = '', raceId, sex, classId, className, captured, gearText = '', choicesText = ''] = fields;
+  const [, key = '', race = '', raceId, sex, classId, className, captured, gearText = '', choicesText = '', itemsText = ''] = fields;
   const gear: ImportedRecord['gear'] = {};
   for (const pair of gearText.split(',').filter(Boolean)) {
     const [slot, id] = pair.split(':');
@@ -81,6 +89,17 @@ export function decodeRecord(text: string): ImportedRecord | undefined {
   for (const pair of choicesText.split(',').filter(Boolean)) {
     const [option, choice] = pair.split(':').map(num);
     if (option && choice) choices.push([option, choice]);
+  }
+  const items: NonNullable<ImportedRecord['items']> = {};
+  for (const entry of itemsText.split(',').filter(Boolean)) {
+    const [id, quality, name = ''] = entry.split(':');
+    const itemId = num(id);
+    if (!itemId || name === '') continue;
+    try {
+      items[itemId] = { name: decodeURIComponent(name), quality: num(quality) ?? 1 };
+    } catch {
+      // A name that does not decode is left out; the item keeps the name the files give it.
+    }
   }
   const sexNumber = num(sex);
   if (!key || !race || (sexNumber !== 0 && sexNumber !== 1)) return undefined;
@@ -95,6 +114,7 @@ export function decodeRecord(text: string): ImportedRecord | undefined {
     gear,
     choices,
     captured: num(captured) ?? 0,
+    ...(Object.keys(items).length > 0 ? { items } : {}),
   };
 }
 
@@ -122,6 +142,15 @@ function recordFromLua(key: string, value: LuaValue): ImportedRecord | undefined
     }
   }
   choices.sort((a, b) => a[0] - b[0]);
+  const items: NonNullable<ImportedRecord['items']> = {};
+  const named = value.get('items');
+  if (named instanceof Map) {
+    for (const [id, item] of named) {
+      const itemId = num(id);
+      const name = at(item, 'name');
+      if (itemId && typeof name === 'string' && name !== '') items[itemId] = { name, quality: num(at(item, 'quality')) ?? 1 };
+    }
+  }
   const className = value.get('class');
   return {
     key,
@@ -134,6 +163,7 @@ function recordFromLua(key: string, value: LuaValue): ImportedRecord | undefined
     gear,
     choices,
     captured: num(value.get('t')) ?? 0,
+    ...(Object.keys(items).length > 0 ? { items } : {}),
   };
 }
 

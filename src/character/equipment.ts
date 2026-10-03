@@ -140,9 +140,15 @@ const ARMOUR_OF_CLASS: Record<number, number> = { 1: 4, 2: 4, 3: 3, 4: 2, 5: 1, 
 export class Equipment {
   private readonly bySlot = new Map<Slot, ItemSummary[]>();
   private readonly items = new Map<number, ItemSummary>();
+  /**
+   * Items the game files have a look for but no name: the client learns those names from
+   * the server. They can be worn by id (an imported character wears them) but not searched.
+   */
+  private readonly unnamed = new Map<number, ItemSummary>();
 
   private constructor(
     summaries: ItemSummary[],
+    unnamed: ItemSummary[],
     /** For each item left out of the list as a twin of another (same name, look and slot), the one kept. */
     private readonly canonical: Map<number, number>,
     private readonly itemFacts: Map<number, { allowableClass: number; level: number }>,
@@ -162,6 +168,7 @@ export class Equipment {
     private readonly fallbacks: Map<string, { model: RaceFallback; texture: RaceFallback }>,
   ) {
     for (const summary of summaries) this.items.set(summary.id, summary);
+    for (const summary of unnamed) this.unnamed.set(summary.id, summary);
     for (const slot of SLOTS) {
       this.bySlot.set(
         slot.id,
@@ -178,7 +185,7 @@ export class Equipment {
       componentModels, textureFileData, componentTextures, helmetData, races, itemSets, classes, baseInfo,
     ] = await Promise.all([
       database.table('ItemSparse', ['Display_lang', 'InventoryType', 'OverallQualityID', 'AllowableClass', 'ItemLevel']),
-      database.table('Item', ['IconFileDataID', 'ClassID', 'SubclassID']),
+      database.table('Item', ['IconFileDataID', 'ClassID', 'SubclassID', 'InventoryType']),
       database.table('ItemModifiedAppearance', ['ItemID', 'ItemAppearanceModifierID', 'ItemAppearanceID']),
       database.table('ItemAppearance', ['ItemDisplayInfoID', 'DefaultIconFileDataID']),
       database.table('ItemDisplayInfo', [
@@ -256,6 +263,16 @@ export class Equipment {
       });
     }
 
+    // Items with a look and no name row. The name is filled in by whoever knows it (the addon).
+    const named = new Set(sparse.rows.map((row) => n(row.ID)));
+    const unnamed: ItemSummary[] = [];
+    for (const row of item.rows) {
+      const id = n(row.ID);
+      const inventoryType = n(row.InventoryType);
+      if (named.has(id) || !visibleTypes.has(inventoryType) || !displayOfItem.has(id)) continue;
+      unnamed.push({ id, name: `Item ${id}`, quality: 1, inventoryType, iconFileId: n(row.IconFileDataID) || iconOfItem.get(id) || 0 });
+    }
+
     const bodyTextures = new Map<number, { section: number; material: number }[]>();
     for (const row of materialRes.rows) {
       const id = n(row.ItemDisplayInfoID);
@@ -309,6 +326,7 @@ export class Equipment {
 
     return new Equipment(
       summaries,
+      unnamed,
       canonical,
       new Map(sparse.rows.map((row) => [n(row.ID), { allowableClass: n(row.AllowableClass), level: n(row.ItemLevel) }])),
       itemSets.rows.map((row) => ({ id: n(row.ID), name: String(row.Name_lang), itemIds: (row.ItemID as number[]).filter(Boolean) })),
@@ -344,11 +362,12 @@ export class Equipment {
   }
 
   /**
-   * The listed item for any item id the game has, including ids left out of the list as
-   * twins of a listed item. Undefined if the id has no look in this build.
+   * The item for any item id the game has a look for: a listed item, the listed twin of an
+   * id left out of the list, or an item the files have no name for (named `Item <id>`).
+   * Undefined if the id has no look in this build.
    */
   resolveItem(id: number): ItemSummary | undefined {
-    return this.items.get(id) ?? this.items.get(this.canonical.get(id) ?? -1);
+    return this.items.get(id) ?? this.items.get(this.canonical.get(id) ?? -1) ?? this.unnamed.get(id);
   }
 
   /** The classes a race can be, in name order. */
@@ -434,6 +453,9 @@ export class Equipment {
       if (!words.every((word) => name.includes(word)) && String(item.id) !== whole) continue;
       (name.startsWith(whole) ? starts : contains).push(item);
     }
+    // An item the files have no name for is found by its id.
+    const byId = this.unnamed.get(Number(whole));
+    if (byId && SLOTS.find((s) => s.id === slot)!.inventoryTypes.includes(byId.inventoryType)) contains.push(byId);
     const found = [...starts, ...contains];
     return { items: found.slice(0, limit), total: found.length };
   }
@@ -473,7 +495,7 @@ export class Equipment {
 
   /** What wearing an item does to a race and sex, or undefined if the item is unknown. */
   look(itemId: number, slot: Slot, race: number, sex: number): ItemLook | undefined {
-    const item = this.items.get(itemId);
+    const item = this.items.get(itemId) ?? this.unnamed.get(itemId);
     const display = this.displays.get(this.displayOfItem.get(itemId) ?? 0);
     if (!item || !display) return undefined;
     const displayId = this.displayOfItem.get(itemId)!;

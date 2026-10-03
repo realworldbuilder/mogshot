@@ -33,6 +33,13 @@ describe('imported character records', () => {
     expect(decodeRecord(`  ${code}\n`)).toEqual(thrall);
   });
 
+  it('carries item names through the code, whatever characters they hold', () => {
+    const named = { ...thrall, items: { 16963: { name: 'Helm of Wrath', quality: 4 }, 19019: { name: 'Thunderfury, Blessed: Blade; 100%', quality: 5 } } };
+    const code = encodeRecord(named);
+    expect(code.split(';')).toHaveLength(11);
+    expect(decodeRecord(code)).toEqual(named);
+  });
+
   it('decodes a code with empty fields, and refuses what is not a code', () => {
     const bare = decodeRecord('MOG1;Ann-Realm;Human;;1;;;;;');
     expect(bare).toEqual({ key: 'Ann-Realm', name: 'Ann', realm: 'Realm', race: 'Human', raceId: undefined, sex: 1, classId: undefined, className: undefined, gear: {}, choices: [], captured: 0 });
@@ -61,6 +68,7 @@ describe('imported character records', () => {
       captured: 1790216430,
     });
     expect(human).toEqual(expect.objectContaining({ name: 'Renée', sex: 0, raceId: undefined, gear: { chest: 12640 }, choices: [] }));
+    expect(human!.items).toEqual({ 12640: { name: 'Lionheart "Helm"', quality: 4 } });
     expect(recordsFromSavedVariables('Other = {}')).toEqual([]);
   });
 

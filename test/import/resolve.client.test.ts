@@ -104,14 +104,35 @@ describe.skipIf(!hasClient)('imported characters', () => {
     const result = resolveImport(record({ gear: { head: 999_999_999 } }), appearance, equipment);
     expect(result.gear).toEqual([]);
     expect(result.itemsFound).toEqual({ found: 0, of: 1 });
-    expect(result.problems).toEqual(['Item 999999999 (head) is not in the game data']);
+    expect(result.problems).toEqual(['Item 999999999 (head) has no look in the game data']);
+  });
+
+  it('wears items the game files have no name for, named by the addon', () => {
+    // Short Bow, Barbaric Cloak, Primal Wraps, Bandit Gloves: looks on disk, names from the server.
+    const gear = { ranged: 3039, back: 14563, chest: 15010, hands: 6554 };
+    expect(equipment.item(3039)).toBeUndefined();
+    const bare = resolveImport(record({ gear }), appearance, equipment);
+    expect(bare.itemsFound).toEqual({ found: 4, of: 4 });
+    expect(bare.problems).toEqual([]);
+    expect(bare.gear.map(([slot, item]) => [slot, item.name])).toEqual([
+      ['back', 'Item 14563'], ['chest', 'Item 15010'], ['hands', 'Item 6554'], ['mainHand', 'Item 3039'],
+    ]);
+    for (const [slot, item] of bare.gear) {
+      expect(item.iconFileId).toBeGreaterThan(0);
+      expect(equipment.look(item.id, slot, 2, 1)).toBeDefined();
+    }
+    const named = resolveImport(record({ gear, items: { 14563: { name: 'Barbaric Cloak', quality: 2 } } }), appearance, equipment);
+    expect(named.gear[0]).toEqual(['back', expect.objectContaining({ id: 14563, name: 'Barbaric Cloak', quality: 2 })]);
+    // Found by id in the slot's search, and not otherwise.
+    expect(equipment.search('back', '14563').items.map((i) => i.id)).toEqual([14563]);
+    expect(equipment.search('head', '14563').total).toBe(0);
   });
 
   it('gives a hunter the bow and anyone else their melee weapon', () => {
     const bow = equipment.search('mainHand', 'bow').items.find((i) => i.inventoryType === 15)!;
     const hunter = resolveImport(record({ classId: HUNTER, gear: { mainHand: THUNDERFURY, ranged: bow.id } }), appearance, equipment);
     expect(hunter.gear.map(([slot, item]) => [slot, item.id])).toEqual([['mainHand', bow.id]]);
-    expect(hunter.problems).toEqual([`Thunderfury, Blessed Blade of the Windseeker is left out: a hunter is pictured with the ${bow.name}`]);
+    expect(hunter.problems).toEqual(['Thunderfury, Blessed Blade of the Windseeker is left out: a hunter is pictured with the bow']);
     const warrior = resolveImport(record({ classId: WARRIOR, gear: { mainHand: THUNDERFURY, ranged: bow.id } }), appearance, equipment);
     expect(warrior.gear.map(([slot, item]) => [slot, item.id])).toEqual([['mainHand', THUNDERFURY]]);
     expect(warrior.problems).toEqual([`${bow.name} is left out: both hands are full`]);

@@ -54,9 +54,14 @@ export function resolveImport(record: ImportedRecord, appearance: Appearance, eq
   let found = 0;
   const lookup = (slot: string, id: number): ItemSummary | undefined => {
     const item = equipment.resolveItem(id);
-    if (!item) problems.push(`Item ${id} (${slot}) is not in the game data`);
-    else found++;
-    return item;
+    const told = record.items?.[id];
+    if (!item) {
+      problems.push(`${told ? told.name : `Item ${id}`} (${slot}) has no look in the game data`);
+      return undefined;
+    }
+    found++;
+    // The files have no name for many items; the addon passes along what the game called it.
+    return item.id === id && item.name === `Item ${id}` && told ? { ...item, name: told.name, quality: told.quality } : item;
   };
   const taken = new Set<Slot>();
   const place = (slot: Slot, item: ItemSummary) => {
@@ -75,7 +80,7 @@ export function resolveImport(record: ImportedRecord, appearance: Appearance, eq
     const item = lookup(slot, id);
     if (!item) continue;
     if (slot === 'mainHand' && ranged && hunter) {
-      problems.push(`${item.name} is left out: a hunter is pictured with the ${ranged.name}`);
+      problems.push(`${item.name} is left out: a hunter is pictured with the bow`);
       continue;
     }
     place(slot, item);
