@@ -2,8 +2,9 @@
 
 Ideas that are not the one job (folder → character → pose → transparent PNG). One line each. None of these is built until version 1 is public and the owner picks one.
 
-- Scenes and places behind the character: the 3D character-select screens, zones (the game's 2D loading screens are in)
-- Sky and weather
+- More of a place: building water, the game's sky, weather and time of day, cast shadows, moving props, people and animals, a camera that walks (standing in the world is built)
+- The 3D character-select screens as places
+- Spots saved by the addon listed on the page (a pasted line from /mogshot spot is built)
 - Animation sequences
 - Captions and stickers
 - Share codes
