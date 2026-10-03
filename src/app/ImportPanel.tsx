@@ -46,7 +46,7 @@ export function ImportPanel({ data, records, recordsError, selectedKey, onImport
         const found = `${result.itemsFound.found} of ${result.itemsFound.of} items found`;
         const look =
           result.choicesApplied === undefined
-            ? 'look not captured'
+            ? 'skin, hair and face not captured: set them below once and they are kept for this character'
             : `${result.choicesApplied.applied} of ${result.choicesApplied.of} look choices apply`;
         const when = record.captured ? `captured ${capturedAgo(record.captured)}, ` : '';
         const text = `${record.name}: ${when}${found}, ${look}.`;

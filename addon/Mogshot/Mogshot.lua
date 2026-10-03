@@ -231,8 +231,15 @@ SlashCmdList["MOGSHOT"] = function()
 	end
 	local looks = 0
 	for _ in pairs(entry.choices or {}) do looks = looks + 1 end
-	say(("captured %s: %d items, %d appearance choices%s."):format(
-		key() or "?", items, looks, looks == 0 and " (open a barber to capture the look)" or ""))
+	say(("captured %s: %d items, %d appearance choices."):format(key() or "?", items, looks))
+	if looks == 0 then
+		-- The game tells addons what a character looks like only inside the barber window.
+		if C_BarberShop and C_BarberShop.GetAvailableCustomizations then
+			say("skin, hair and face are not captured yet. Sit in a barber chair once and they will be. Until then, set them on the page; it remembers them for this character.")
+		else
+			say("this game version cannot tell addons the skin, hair and face. Set them on the page once; it remembers them for this character.")
+		end
+	end
 	local text = code(entry)
 	if showCode(text) then
 		say("the code is in the box in the middle of the screen. Copy it and paste it into the page. Or /reload and give the page the folder again.")

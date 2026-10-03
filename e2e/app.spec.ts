@@ -516,7 +516,7 @@ test('imports a character from a pasted code and keeps the look given to her', a
   await expect(page.locator('[data-slot="head"] .item-name')).toHaveText('Lionheart Helm');
   await expect(page.locator('[data-slot="mainHand"] .item-name')).toHaveText('Thunderfury, Blessed Blade of the Windseeker');
   await expect(page.locator('#import-note')).toContainText('2 of 2 items found');
-  await expect(page.locator('#import-note')).toContainText('look not captured');
+  await expect(page.locator('#import-note')).toContainText('skin, hair and face not captured');
   expect(await problemsShown(page)).toEqual([]);
   await page.locator('#canvas').screenshot({ path: 'test-results/imported.png' });
   await page.screenshot({ path: 'test-results/page-imported.png', fullPage: true });
