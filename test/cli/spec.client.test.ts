@@ -48,6 +48,8 @@ describe.skipIf(!hasClient)('a spec', () => {
     expect(() => resolveSpec({ race: 'Orc', size: 'huge' }, world)).toThrow(/no size called "huge"/);
     expect(() => resolveSpec({ race: 'Orc', character: 'Nobody' }, world)).toThrow(/addon has saved none/);
     expect(() => resolveSpec({}, world)).toThrow(/no race and no character/);
+    expect(() => resolveSpec({ race: 'Orc', place: { map: 'Narnia', x: 0, y: 0 } }, world)).toThrow(/no map called "Narnia"/);
+    expect(resolveSpec({ race: 'Orc', place: { map: 'Kalimdor', x: 1, y: 2, facing: 90 } }, world).place).toMatchObject({ x: 1, y: 2, reach: 300 });
   });
 
   it('is drawn to a PNG by the command line', async () => {
@@ -96,6 +98,7 @@ describe.skipIf(!hasClient)('a spec', () => {
         { out: 'stand.mp4', race: 'Dwarf', sex: 'male', clip: true, size: { width: 480, height: 480 }, backdrop: 'Ember' },
         { out: 'dance.gif', race: 'Tauren', sex: 'male', clip: { animation: 'EmoteDance' }, size: { width: 320, height: 240 }, backdrop: 'Frost' },
         { out: 'frames.zip', race: 'Human', sex: 'female', clip: { seconds: 0.2, fps: 10 }, size: { width: 200, height: 250 } },
+        { out: 'place.png', race: 'Dwarf', sex: 'male', place: { x: -8833, y: 628, facing: 215 }, size: { width: 640, height: 360 } },
         { out: 'clip.png', race: 'Human', clip: true },
         { out: 'still.mp4', race: 'Human' },
       ]),
@@ -107,7 +110,7 @@ describe.skipIf(!hasClient)('a spec', () => {
       },
     );
     type Report = { width: number; height: number; problems: string[]; error?: string; clip: { animation: string; frames: number; fps: number; length: number } };
-    const [stand, dance, frames, wrongName, noClip] = JSON.parse(stdout) as Report[];
+    const [stand, dance, frames, placed, wrongName, noClip] = JSON.parse(stdout) as (Report & { place: { ground: number[]; props: number } })[];
 
     expect(stand!.problems).toEqual([]);
     expect(stand!.clip).toMatchObject({ animation: 'Stand', fps: 30 });
@@ -131,6 +134,15 @@ describe.skipIf(!hasClient)('a spec', () => {
     // Transparent around the character, and the character is there.
     expect(frame.pixels[3]).toBe(0);
     expect(alphaBounds(frame)!.height).toBeGreaterThan(150);
+
+    // Standing on Stormwind's gate bridge: the game's height for it, props around, and a picture filled to its corners.
+    expect(placed!.problems).toEqual([]);
+    expect(placed!.place.ground[2]).toBeCloseTo(93.3, 0);
+    expect(placed!.place.props).toBeGreaterThan(100);
+    const there = decodePng(new Uint8Array(await readFile(join(dir, 'place.png'))));
+    expect([there.width, there.height]).toEqual([640, 360]);
+    expect(there.pixels[3]).toBe(255);
+    expect(there.pixels[there.pixels.length - 1]).toBe(255);
 
     expect(wrongName!.error).toMatch(/saved as .mp4, .gif or .zip/);
     expect(noClip!.error).toMatch(/add "clip": true/);

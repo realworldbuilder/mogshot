@@ -40,6 +40,9 @@ Everything is printed as JSON. A spec, with every field but a race or a characte
     "clip": true,                                 a looping clip of the pose's animation instead of a picture; "out" ends
                                                   .mp4, .gif or .zip (transparent PNG frames). Or { "animation": "EmoteDance",
                                                   "seconds": 4, "fps": 30 }; without seconds, one pass, which loops cleanly
+    "place": { "x": -8833, "y": 628, "facing": 215 },   stand in the game world, at the position /mogshot spot prints in the game;
+                                                  also "map" (name or number, default Eastern Kingdoms), "z" to pick a floor,
+                                                  "reach" in yards (default 300). Fills the frame; default size "1080p"
     "camera": { "yaw": 25, "pitch": 5, "zoom": 1.2, "fov": 30, "panX": 0, "panY": 0 },   degrees
     "size": "square",                             or { "width": 1080, "height": 1350, "tight": false }; default "tight" (a clip: "square", at 1080)
     "backdrop": "Frost"                           a gradient, "#1c1f26", { "screen": "Teldrassil", "blur": 8, "vignette": 0.4 },
