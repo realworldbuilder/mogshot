@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { InstallError, type OpenStage } from '../casc/storage';
 import { recordsFromFolder } from '../import/folder';
 import type { ImportedRecord } from '../import/record';
 import { filesFromDroppedFolder } from '../io/dropped-folder';
 import { type PickedFile, pickedFiles } from '../io/file-list-source';
-import type { OpenResult } from '../worker/api';
+import type { Backdrop } from '../render/backdrop';
+import type { LoadingScreen, OpenResult } from '../worker/api';
 import { DataClient, DataError } from '../worker/client';
+import { type LoadScreen, rememberBackdrop, rememberedBackdrop } from './BackdropControls';
+import { BackdropPanel } from './BackdropPanel';
 import { FolderDetails } from './FolderDetails';
 import { Viewer } from './Viewer';
 
@@ -28,6 +31,8 @@ const chromium = 'chrome' in window;
 
 export const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+type Tab = 'character' | 'backdrop';
+
 export function App() {
   // Started with the page so the worker script is already in memory when the folder arrives.
   const data = useRef<DataClient>(null);
@@ -36,6 +41,50 @@ export function App() {
   const [phase, setPhase] = useState<Phase>({ kind: 'empty' });
   const [dragging, setDragging] = useState(false);
   const busy = useRef(false);
+
+  // The tab on screen, kept in the address so a link can open the Backdrop tab.
+  const [tab, setTab] = useState<Tab>(location.hash === '#backdrop' ? 'backdrop' : 'character');
+  const showTab = (next: Tab) => {
+    setTab(next);
+    history.replaceState(null, '', next === 'backdrop' ? '#backdrop' : location.pathname + location.search);
+  };
+
+  useEffect(() => {
+    const follow = () => setTab(location.hash === '#backdrop' ? 'backdrop' : 'character');
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, []);
+
+  // What goes behind the character: set on either tab, kept for the next visit.
+  const [backdrop, setBackdrop] = useState<Backdrop>(rememberedBackdrop);
+  useEffect(() => rememberBackdrop(backdrop), [backdrop]);
+
+  // The open folder's loading screens, and a reader for their pictures that reads each one once.
+  const openKey = phase.kind === 'ready' ? phase.opened.info.buildKey + phase.opened.info.product : undefined;
+  const [screens, setScreens] = useState<LoadingScreen[]>([]);
+  const [screensError, setScreensError] = useState<string>();
+  useEffect(() => {
+    setScreens([]);
+    setScreensError(undefined);
+    if (openKey === undefined) return;
+    let stale = false;
+    data.current!
+      .backdrops()
+      .then((list) => !stale && setScreens(list))
+      .catch((cause) => !stale && setScreensError(`The game's loading screens could not be listed: ${messageOf(cause)}`));
+    return () => {
+      stale = true;
+    };
+  }, [openKey]);
+  const loadScreen = useMemo<LoadScreen | undefined>(() => {
+    if (openKey === undefined) return undefined;
+    const read = new Map<number, ReturnType<LoadScreen>>();
+    return (fileId) => {
+      let picture = read.get(fileId);
+      if (!picture) read.set(fileId, (picture = data.current!.icon(fileId).catch(() => undefined)));
+      return picture;
+    };
+  }, [openKey]);
 
   const fail = (error: unknown) => {
     const install = error instanceof InstallError || (error instanceof DataError && error.install);
@@ -116,6 +165,40 @@ export function App() {
         Transparent PNG cutouts of World of Warcraft characters, made from your own game files in your browser.
       </p>
 
+      <nav class="tabs" role="tablist">
+        <button role="tab" id="tab-character" aria-selected={tab === 'character'} class={tab === 'character' ? 'on' : ''} onClick={() => showTab('character')}>
+          Character
+        </button>
+        <button role="tab" id="tab-backdrop" aria-selected={tab === 'backdrop'} class={tab === 'backdrop' ? 'on' : ''} onClick={() => showTab('backdrop')}>
+          Backdrop
+        </button>
+      </nav>
+
+      {tab === 'backdrop' && (
+        <BackdropPanel
+          backdrop={backdrop}
+          onChange={setBackdrop}
+          screens={screens}
+          loadScreen={loadScreen}
+          folderNote={
+            phase.kind === 'opening'
+              ? { text: phase.message, bad: false }
+              : phase.kind === 'error'
+                ? { text: phase.message, bad: true }
+                : screensError
+                  ? { text: screensError, bad: true }
+                  : phase.kind === 'empty'
+                    ? {
+                        text: "To add the game's loading screens to the list, drag your World of Warcraft folder onto this page, or open it on the Character tab.",
+                        bad: false,
+                      }
+                    : undefined
+          }
+        />
+      )}
+
+      {/* The Character tab stays alive behind the Backdrop tab, so the character and view are kept. */}
+      <div hidden={tab !== 'character'}>
       {phase.kind !== 'ready' && (
         <section class="panel">
           <h2>Start with your World of Warcraft folder</h2>
@@ -161,6 +244,11 @@ export function App() {
             data={data.current}
             records={phase.records}
             recordsError={phase.recordsError}
+            active={tab === 'character'}
+            backdrop={backdrop}
+            onBackdrop={setBackdrop}
+            screens={screens}
+            loadScreen={loadScreen!}
           />
           <FolderDetails
             opened={phase.opened}
@@ -170,6 +258,7 @@ export function App() {
           />
         </>
       )}
+      </div>
 
       <footer class="dim small">
         <p>

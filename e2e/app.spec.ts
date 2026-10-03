@@ -643,3 +643,46 @@ test('puts a backdrop behind the character, saves it on its own, and remembers i
   await expect(page.locator('#download-backdrop')).toHaveCount(0);
   await expect(page.locator('.hint')).toContainText('transparency');
 });
+
+test('makes a backdrop on its own tab, before any folder is opened', async ({ page }) => {
+  await load(page, false);
+  await page.locator('#tab-backdrop').click();
+  await expect(page.locator('#backdrop-tab')).toBeVisible();
+  await expect(page.locator('#backdrop-download')).toBeDisabled();
+  await expect(page.locator('#backdrop-folder-note')).toContainText('drag your World of Warcraft folder');
+
+  // A gradient needs no game files.
+  await page.locator('#backdrop-kind').selectOption('gradient:Frost');
+  await expect(page.locator('#backdrop-canvas')).toHaveAttribute('data-backdrop', 'frost');
+  await page.locator('#backdrop-size').selectOption('1080p');
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#backdrop-download').click()]);
+  expect(download.suggestedFilename()).toBe('mogshot-backdrop-frost.png');
+  await download.saveAs('test-results/backdrop-tab-frost.png');
+  await expect(page.locator('#backdrop-export-note')).toContainText('Saved 1,920 × 1,080');
+  const saved = decodePng(readFileSync('test-results/backdrop-tab-frost.png'));
+  expect([saved.width, saved.height]).toEqual([1920, 1080]);
+  for (let i = 3; i < saved.pixels.length; i += 4001 * 4) expect(saved.pixels[i]).toBe(255);
+  await page.screenshot({ path: 'test-results/page-backdrop-tab.png', fullPage: true });
+
+  // The same backdrop is behind the character on the other tab once the folder is open.
+  await page.locator('#tab-character').click();
+  await openAndDraw(page);
+  await expect(page.locator('#canvas')).toHaveAttribute('data-backdrop', 'frost');
+
+  // The folder adds the game's loading screens to the Backdrop tab.
+  await page.locator('#tab-backdrop').click();
+  await expect(page.locator('#backdrop-folder-note')).toHaveCount(0);
+  const names = await page.locator('#backdrop-kind optgroup[label="Loading screen"] option').allTextContents();
+  expect(names.length).toBeGreaterThan(40);
+  await page.locator('#backdrop-kind').selectOption({ label: names.find((name) => name.startsWith('Kalimdor'))! });
+  await expect(page.locator('#backdrop-canvas')).toHaveAttribute('data-backdrop', /^kalimdor/);
+  await page.screenshot({ path: 'test-results/page-backdrop-tab-screen.png', fullPage: true });
+  await page.locator('#tab-character').click();
+  await expect(page.locator('#canvas')).toHaveAttribute('data-backdrop', /^kalimdor/);
+  await expect(page.locator('#backdrop-kind')).toHaveCount(1);
+
+  // A link can open the tab, and the backdrop is remembered.
+  await page.goto('./#backdrop');
+  await expect(page.locator('#backdrop-tab')).toBeVisible();
+  await expect(page.locator('#backdrop-kind')).toHaveValue(/^screen:/);
+});

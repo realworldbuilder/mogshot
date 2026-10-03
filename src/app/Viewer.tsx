@@ -4,59 +4,19 @@ import type { ItemSummary, Slot } from '../character/equipment';
 import type { PosePreset } from '../character/poses';
 import type { AnimationInfo, PoseInfo, PoseRequest } from '../character/scene';
 import type { ImportedRecord } from '../import/record';
-import type { Image } from '../formats/blp';
 import type { ImportResult } from '../import/resolve';
-import { type Backdrop, backdropImage, CLASSIC_SCREEN_ASPECT, composeBackdrop, GRADIENTS, MAX_BLUR, NO_BACKDROP, slug } from '../render/backdrop';
+import { type Backdrop, backdropImage, slug } from '../render/backdrop';
 import { encodePng, unpremultiply } from '../render/export';
 import { type Camera, CharacterRenderer, DEFAULT_CAMERA } from '../render/renderer';
 import type { LoadingScreen, Race } from '../worker/api';
 import type { DataClient } from '../worker/client';
 import { messageOf } from './App';
+import { BackdropControls, backdropName, compose, drawable, type LoadScreen, screenProblem, useScreen } from './BackdropControls';
 import { GearPanel } from './GearPanel';
 import { ImportPanel } from './ImportPanel';
+import { downloadPng, previewSize, savedNote, type Size, SIZES } from './sizes';
 
 const SEX_NAMES = ['Male', 'Female'];
-
-/** The pictures that can be saved. A fixed-size picture shows what the preview shows; a tight crop fits the character. */
-const SIZES = [
-  { id: 'tight', name: 'Tight crop (4K tall or wide)', width: 2880, height: 3840, tight: true },
-  { id: '4k', name: '4K (3840 × 2160)', width: 3840, height: 2160, tight: false },
-  { id: '1080p', name: '1080p (1920 × 1080)', width: 1920, height: 1080, tight: false },
-  { id: 'youtube', name: 'YouTube thumbnail (1280 × 720)', width: 1280, height: 720, tight: false },
-  { id: 'square', name: 'Square (2160 × 2160)', width: 2160, height: 2160, tight: false },
-] as const;
-type Size = (typeof SIZES)[number];
-
-/** Pixel size of the preview for a picture shape: about a million pixels, sharp on a high-density screen. */
-function previewSize(size: Size): { width: number; height: number } {
-  const aspect = size.width / size.height;
-  const height = Math.round(Math.sqrt(1_100_000 / aspect) / 2) * 2;
-  return { width: Math.round((height * aspect) / 2) * 2, height };
-}
-
-
-const BACKDROP_KINDS = new Set(['none', 'colour', 'gradient', 'screen']);
-
-/** A remembered backdrop, or none if it is not one this version knows. */
-function validBackdrop(value: unknown): Backdrop {
-  if (typeof value === 'object' && value !== null && BACKDROP_KINDS.has((value as Backdrop).kind)) return value as Backdrop;
-  return NO_BACKDROP;
-}
-
-/** The value of the backdrop select for a backdrop. */
-function backdropValue(backdrop: Backdrop): string {
-  switch (backdrop.kind) {
-    case 'none':
-    case 'colour':
-      return backdrop.kind;
-    case 'gradient': {
-      const preset = GRADIENTS.find((g) => g.from === backdrop.from && g.to === backdrop.to);
-      return `gradient:${preset?.name ?? 'custom'}`;
-    }
-    case 'screen':
-      return `screen:${backdrop.fileId}`;
-  }
-}
 
 interface Character {
   raceId: number;
@@ -87,7 +47,6 @@ interface Remembered {
   classId?: number;
   /** `Name-Realm` of the imported character on screen, if it was one. */
   imported?: string;
-  backdrop?: Backdrop;
 }
 
 const REMEMBER_KEY = 'mogshot.character';
@@ -135,9 +94,16 @@ interface ViewerProps {
   /** The characters the addon captured, found in the folder. */
   records: ImportedRecord[];
   recordsError?: string;
+  /** False while another tab is shown: the viewer stays alive but leaves the shared controls to that tab. */
+  active: boolean;
+  /** What is drawn behind the character, shared with the Backdrop tab. */
+  backdrop: Backdrop;
+  onBackdrop: (backdrop: Backdrop) => void;
+  screens: readonly LoadingScreen[];
+  loadScreen: LoadScreen;
 }
 
-export function Viewer({ data, records, recordsError }: ViewerProps) {
+export function Viewer({ data, records, recordsError, active, backdrop, onBackdrop, screens, loadScreen }: ViewerProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<CharacterRenderer>(null);
   const request = useRef(0);
@@ -163,14 +129,8 @@ export function Viewer({ data, records, recordsError }: ViewerProps) {
   const [error, setError] = useState<string>();
   const [exportNote, setExportNote] = useState<{ text: string; bad: boolean }>();
   const [exporting, setExporting] = useState(false);
-  const [backdrop, setBackdrop] = useState<Backdrop>(validBackdrop(previous.current?.backdrop));
-  const [screens, setScreens] = useState<LoadingScreen[]>([]);
-  const [backdropNote, setBackdropNote] = useState<string>();
-  // Loading screens read so far, by file; undefined for one that could not be read.
-  const screenImages = useRef(new Map<number, Image | undefined>());
-  const [screensRead, setScreensRead] = useState(0);
   // The backdrop as drawn behind the preview, kept to give a renderer created later.
-  const backdropSource = useRef<ReturnType<typeof composeBackdrop>>(undefined);
+  const backdropSource = useRef<ReturnType<typeof compose>>(undefined);
 
   const redraw = () => renderer.current?.render(camera.current);
 
@@ -207,18 +167,9 @@ export function Viewer({ data, records, recordsError }: ViewerProps) {
       size: size.id,
       classId,
       imported: importedKey,
-      backdrop,
     });
     if (importedKey) rememberLook(importedKey, [...shown.choices]);
-  }, [character, shown, gear, size, pose, classId, importedKey, backdrop]);
-
-  // The game's loading screens, offered as backdrops.
-  useEffect(() => {
-    data
-      .backdrops()
-      .then(setScreens)
-      .catch((cause) => setBackdropNote(`The game's loading screens could not be listed: ${messageOf(cause)}`));
-  }, [data]);
+  }, [character, shown, gear, size, pose, classId, importedKey]);
 
   /** Show an imported character: the captured look if there is one, else the look last given to this character. */
   const showImported = (result: ImportResult, record: ImportedRecord) => {
@@ -272,76 +223,20 @@ export function Viewer({ data, records, recordsError }: ViewerProps) {
   const preview = previewSize(size);
   useEffect(redraw, [preview.width, preview.height]);
 
-  const screenName = (fileId: number) => screens.find((s) => s.fileId === fileId)?.name ?? `file ${fileId}`;
-  const screenImage = () => (backdrop.kind === 'screen' ? screenImages.current.get(backdrop.fileId) : undefined);
-  /** The shape a loading screen is shown at: classic ones are squares stretched to 4:3. */
-  const screenAspect = () =>
-    backdrop.kind === 'screen' && !screens.find((s) => s.fileId === backdrop.fileId)?.wide ? CLASSIC_SCREEN_ASPECT : undefined;
+  const screen = useScreen(backdrop, loadScreen);
+  /** Whether the picture saved has a backdrop; a loading screen that could not be read leaves it transparent. */
+  const hasBackdrop = drawable(backdrop, screen);
   /** Composes the backdrop at a size: the preview's, or the picture's. */
-  const compose = (width: number, height: number) => composeBackdrop(backdrop, width, height, screenImage(), screenAspect());
+  const composeAt = (width: number, height: number) => compose(backdrop, screen, screens, width, height);
 
   // Compose the backdrop behind the preview whenever it or the preview's shape changes.
+  // While a loading screen is being read, the previous backdrop stays.
   useEffect(() => {
-    if (backdrop.kind === 'screen') {
-      const { fileId } = backdrop;
-      if (!screenImages.current.has(fileId)) {
-        // Read the picture; the previous backdrop stays until it arrives.
-        data
-          .icon(fileId)
-          .then((image) => screenImages.current.set(fileId, image))
-          .catch(() => screenImages.current.set(fileId, undefined))
-          .finally(() => setScreensRead((count) => count + 1));
-        return;
-      }
-      if (!screenImages.current.get(fileId)) {
-        setBackdropNote(`The ${screenName(fileId)} loading screen could not be read. The picture has no backdrop.`);
-        backdropSource.current = undefined;
-        renderer.current?.setBackdrop(undefined);
-        redraw();
-        return;
-      }
-    }
-    setBackdropNote(undefined);
-    backdropSource.current = compose(preview.width, preview.height);
+    if (screen.state === 'pending') return;
+    backdropSource.current = composeAt(preview.width, preview.height);
     renderer.current?.setBackdrop(backdropSource.current);
     redraw();
-  }, [backdrop, preview.width, preview.height, screensRead, screens]);
-
-  /** Change the backdrop from the select, keeping the sliders' settings where they still apply. */
-  const pickBackdrop = (value: string) => {
-    const vignette = backdrop.kind === 'none' ? undefined : backdrop.vignette;
-    if (value === 'none') setBackdrop(NO_BACKDROP);
-    else if (value === 'colour') {
-      setBackdrop({ kind: 'colour', colour: backdrop.kind === 'colour' ? backdrop.colour : '#1c1f26', vignette: vignette ?? 0 });
-    } else if (value.startsWith('gradient:')) {
-      const preset = GRADIENTS.find((g) => g.name === value.slice('gradient:'.length));
-      const was = backdrop.kind === 'gradient' ? backdrop : undefined;
-      setBackdrop({
-        kind: 'gradient',
-        from: preset?.from ?? was?.from ?? GRADIENTS[0].from,
-        to: preset?.to ?? was?.to ?? GRADIENTS[0].to,
-        shape: was?.shape ?? 'radial',
-        vignette: vignette ?? 0,
-      });
-    } else if (value.startsWith('screen:')) {
-      const was = backdrop.kind === 'screen' ? backdrop : undefined;
-      setBackdrop({ kind: 'screen', fileId: Number(value.slice('screen:'.length)), blur: was?.blur ?? 0, vignette: was?.vignette ?? 0.4 });
-    }
-  };
-
-  /** A short name for the backdrop, for file names. */
-  const backdropName = (): string => {
-    switch (backdrop.kind) {
-      case 'none':
-        return 'none';
-      case 'colour':
-        return 'colour';
-      case 'gradient':
-        return slug(GRADIENTS.find((g) => g.from === backdrop.from && g.to === backdrop.to)?.name ?? 'gradient');
-      case 'screen':
-        return slug(screenName(backdrop.fileId));
-    }
-  };
+  }, [backdrop, preview.width, preview.height, screen.state, screen.image, screens]);
 
   // Camera: drag to turn, shift-drag (or right-drag) to slide, wheel to zoom.
   useEffect(() => {
@@ -432,14 +327,12 @@ export function Viewer({ data, records, recordsError }: ViewerProps) {
     if (target) poseAt(sequence, time, { animationId: target.id, variation: target.variation, time });
   };
 
-  /** Whether the picture saved has a backdrop; a backdrop that could not be read leaves it transparent. */
-  const hasBackdrop = backdrop.kind !== 'none' && (backdrop.kind !== 'screen' || screenImage() !== undefined);
 
   /** The picture as PNG bytes, at the chosen size. With a backdrop the whole preview is saved, uncropped. */
   const picture = async () => {
     const view = renderer.current!;
     // The preview's backdrop is small; the picture gets one composed at its own size.
-    if (hasBackdrop) view.setBackdrop(compose(size.width, size.height));
+    if (hasBackdrop) view.setBackdrop(composeAt(size.width, size.height));
     try {
       const image = view.renderImage(camera.current, {
         longSide: Math.max(size.width, size.height),
@@ -453,18 +346,6 @@ export function Viewer({ data, records, recordsError }: ViewerProps) {
     }
   };
 
-  const download = (png: Uint8Array, name: string) => {
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(new Blob([png as BlobPart], { type: 'image/png' }));
-    link.download = name;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
-  };
-
-  const exportNoteFor = (what: string, image: Image, png: Uint8Array, start: number) =>
-    `${what} ${image.width.toLocaleString()} × ${image.height.toLocaleString()} pixels ` +
-    `(${(png.length / 1024 / 1024).toFixed(1)} MB) in ${((performance.now() - start) / 1000).toFixed(1)} s.`;
-
   const save = async (how: 'download' | 'copy') => {
     if (!renderer.current || !race || !character) return;
     setExporting(true);
@@ -474,9 +355,9 @@ export function Viewer({ data, records, recordsError }: ViewerProps) {
       if (how === 'copy') {
         await navigator.clipboard.write([new ClipboardItem({ 'image/png': new Blob([png as BlobPart], { type: 'image/png' }) })]);
       } else {
-        download(png, `mogshot-${slug(`${race.name} ${SEX_NAMES[character.sex]}`)}.png`);
+        downloadPng(png, `mogshot-${slug(`${race.name} ${SEX_NAMES[character.sex]}`)}.png`);
       }
-      setExportNote({ bad: false, text: exportNoteFor(how === 'copy' ? 'Copied' : 'Saved', image, png, start) });
+      setExportNote({ bad: false, text: savedNote(how === 'copy' ? 'Copied' : 'Saved', image, png, start) });
     } catch (cause) {
       setExportNote({ bad: true, text: `The picture could not be ${how === 'copy' ? 'copied' : 'exported'}: ${messageOf(cause)}` });
     } finally {
@@ -489,12 +370,12 @@ export function Viewer({ data, records, recordsError }: ViewerProps) {
     setExporting(true);
     try {
       const start = performance.now();
-      const canvas = compose(size.width, size.height);
+      const canvas = composeAt(size.width, size.height);
       if (!canvas) return;
       const image = backdropImage(canvas);
       const png = await encodePng(image);
-      download(png, `mogshot-backdrop-${backdropName()}.png`);
-      setExportNote({ bad: false, text: exportNoteFor('Saved the backdrop alone,', image, png, start) });
+      downloadPng(png, `mogshot-backdrop-${backdropName(backdrop, screens)}.png`);
+      setExportNote({ bad: false, text: savedNote('Saved the backdrop alone,', image, png, start) });
     } catch (cause) {
       setExportNote({ bad: true, text: `The backdrop could not be exported: ${messageOf(cause)}` });
     } finally {
@@ -528,7 +409,7 @@ export function Viewer({ data, records, recordsError }: ViewerProps) {
                 class={building ? 'building' : ''}
                 data-drawn={shown?.drawn ?? 0}
                 data-pose={pose ? `${pose.sequence}:${pose.time}` : ''}
-                data-backdrop={hasBackdrop ? backdropName() : ''}
+                data-backdrop={hasBackdrop ? backdropName(backdrop, screens) : ''}
               />
             </div>
             <p class="dim small hint">
@@ -610,104 +491,9 @@ export function Viewer({ data, records, recordsError }: ViewerProps) {
               </div>
             </div>
 
-            <div class="pose" id="backdrop">
-              <div class="scrub">
-                <label class="small" for="backdrop-kind">
-                  Backdrop
-                </label>
-                <select id="backdrop-kind" value={backdropValue(backdrop)} onChange={(event) => pickBackdrop(event.currentTarget.value)}>
-                  <option value="none">None (transparent)</option>
-                  <option value="colour">Colour</option>
-                  <optgroup label="Gradient">
-                    {GRADIENTS.map((g) => (
-                      <option value={`gradient:${g.name}`}>{g.name}</option>
-                    ))}
-                    <option value="gradient:custom">Custom colours</option>
-                  </optgroup>
-                  {screens.length > 0 && (
-                    <optgroup label="Loading screen">
-                      {screens.map((s) => (
-                        <option value={`screen:${s.fileId}`}>{s.name}</option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-                {backdrop.kind === 'colour' && (
-                  <input
-                    type="color"
-                    id="backdrop-colour"
-                    aria-label="Backdrop colour"
-                    value={backdrop.colour}
-                    onInput={(event) => setBackdrop({ ...backdrop, colour: event.currentTarget.value })}
-                  />
-                )}
-                {backdrop.kind === 'gradient' && (
-                  <>
-                    <input
-                      type="color"
-                      id="gradient-from"
-                      aria-label="Colour behind the character"
-                      value={backdrop.from}
-                      onInput={(event) => setBackdrop({ ...backdrop, from: event.currentTarget.value })}
-                    />
-                    <input
-                      type="color"
-                      id="gradient-to"
-                      aria-label="Colour at the edges"
-                      value={backdrop.to}
-                      onInput={(event) => setBackdrop({ ...backdrop, to: event.currentTarget.value })}
-                    />
-                    <select
-                      id="gradient-shape"
-                      class="short"
-                      aria-label="Gradient shape"
-                      value={backdrop.shape}
-                      onChange={(event) => setBackdrop({ ...backdrop, shape: event.currentTarget.value as 'radial' | 'vertical' })}
-                    >
-                      <option value="radial">Spotlight</option>
-                      <option value="vertical">Top to bottom</option>
-                    </select>
-                  </>
-                )}
-              </div>
-              {backdrop.kind !== 'none' && (
-                <div class="scrub" id="backdrop-adjust">
-                  {backdrop.kind === 'screen' && (
-                    <>
-                      <label class="small" for="blur">
-                        Blur
-                      </label>
-                      <input
-                        id="blur"
-                        type="range"
-                        min={0}
-                        max={MAX_BLUR}
-                        step={1}
-                        value={backdrop.blur}
-                        onInput={(event) => setBackdrop({ ...backdrop, blur: Number(event.currentTarget.value) })}
-                      />
-                    </>
-                  )}
-                  <label class="small" for="vignette">
-                    Vignette
-                  </label>
-                  <input
-                    id="vignette"
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={Math.round(backdrop.vignette * 100)}
-                    onInput={(event) => setBackdrop({ ...backdrop, vignette: Number(event.currentTarget.value) / 100 })}
-                  />
-                </div>
-              )}
-              {backdropNote && (
-                <p class="bad small" id="backdrop-note">
-                  {backdropNote}
-                </p>
-              )}
-            </div>
+            {active && (
+              <BackdropControls backdrop={backdrop} onChange={onBackdrop} screens={screens} problem={screenProblem(backdrop, screen, screens)} />
+            )}
 
             <div class="actions">
               <select
