@@ -62,6 +62,81 @@ end
 -- `undressing` says the player just changed what they wear, so finding nothing worn is real.
 -- At other moments (a loading screen, logging out) the game may report nothing worn; what
 -- was captured before is kept then.
+-- What this version of the game exposes about a character's look, written to the saved
+-- file so it can be read from outside the game. Diagnostic only.
+local function probe()
+	local out = {}
+	-- Stored first, so whatever is found survives a later step failing.
+	MogshotDB = MogshotDB or {}
+	MogshotDB._probe = out
+	local function try(name, fn)
+		local ok, a, b, c = pcall(fn)
+		out[name] = ok and { tostring(a), tostring(b), tostring(c) } or ("error: " .. tostring(a))
+	end
+	try("build", function() return GetBuildInfo() end)
+	out.hasBarber = C_BarberShop ~= nil
+	if C_AddOns and C_AddOns.LoadAddOn then try("loadBarberUI", function() return C_AddOns.LoadAddOn("Blizzard_BarbershopUI") end) end
+	if C_BarberShop then
+		try("available", function()
+			local list = C_BarberShop.GetAvailableCustomizations()
+			if type(list) ~= "table" then return type(list) end
+			local options = 0
+			for _, category in ipairs(list) do options = options + #(category.options or {}) end
+			return #list, options
+		end)
+		try("currentData", function()
+			local data = C_BarberShop.GetCurrentCharacterData()
+			if type(data) ~= "table" then return type(data) end
+			local keys = {}
+			for k, v in pairs(data) do keys[#keys + 1] = tostring(k) .. "=" .. tostring(v) end
+			return table.concat(keys, ",")
+		end)
+		try("viewingModel", function() return C_BarberShop.GetViewingChrModel() end)
+		try("typeInfo", function()
+			local types = {}
+			for i = 0, 12 do
+				local ok, a, b, c = pcall(C_BarberShop.GetCustomizationTypeInfo, i)
+				types[#types + 1] = i .. ":" .. (ok and (tostring(a) .. "/" .. tostring(b) .. "/" .. tostring(c)) or "error")
+			end
+			return table.concat(types, " ")
+		end)
+	end
+	-- Every function in a C_ namespace, or global, whose name suggests appearance.
+	try("functions", function()
+	local names = {}
+	local function interesting(name)
+		return type(name) == "string" and (name:find("ustomiz") or name:find("Barber") or name:find("Appearance") or name:find("HairStyle") or name:find("SkinColor") or name:find("FacialHair"))
+	end
+	for name, value in pairs(_G) do
+		if type(name) == "string" then
+			if type(value) == "table" and name:sub(1, 2) == "C_" then
+				for fn, v in pairs(value) do
+					if type(v) == "function" and (interesting(fn) or interesting(name)) then names[#names + 1] = name .. "." .. fn end
+				end
+			elseif type(value) == "function" and interesting(name) then
+				names[#names + 1] = name
+			end
+		end
+	end
+	table.sort(names)
+	return table.concat(names, " ")
+	end)
+	-- Methods of a model showing the player that suggest appearance.
+	try("modelMethods", function()
+		local model = CreateFrame("PlayerModel")
+		model:SetUnit("player")
+		local found = {}
+		local index = getmetatable(model).__index
+		if type(index) == "table" then
+			for name in pairs(index) do
+				if interesting(name) or name:find("Display") or name:find("Unit") then found[#found + 1] = name end
+			end
+		end
+		table.sort(found)
+		return table.concat(found, " ")
+	end)
+end
+
 local function capture(undressing)
 	local entry = record()
 	if not entry then return end
@@ -93,6 +168,8 @@ local function capture(undressing)
 		entry.items = named
 		entry.t = time()
 	end
+	-- The look, wherever the game is willing to tell it (certainly at a barber).
+	pcall(captureLook, entry)
 	return entry, items
 end
 
@@ -229,6 +306,7 @@ SlashCmdList["MOGSHOT"] = function()
 		say("could not read this character: " .. tostring(entry))
 		return
 	end
+	pcall(probe)
 	local looks = 0
 	for _ in pairs(entry.choices or {}) do looks = looks + 1 end
 	say(("captured %s: %d items, %d appearance choices."):format(key() or "?", items, looks))
