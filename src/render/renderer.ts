@@ -4,7 +4,9 @@ import type { Image } from '../formats/blp';
 import { invert, lookAt, type Mat4, multiply, perspective, transformPoint } from '../math/mat4';
 import { alphaBounds } from './export';
 import { combiners } from './shader-table';
-import { DOWNSAMPLE_FRAGMENT_SOURCE, DOWNSAMPLE_VERTEX_SOURCE, FRAGMENT_SOURCE, VERTEX_SOURCE } from './shaders';
+import {
+  BACKDROP_FRAGMENT_SOURCE, BACKDROP_VERTEX_SOURCE, DOWNSAMPLE_FRAGMENT_SOURCE, DOWNSAMPLE_VERTEX_SOURCE, FRAGMENT_SOURCE, VERTEX_SOURCE,
+} from './shaders';
 
 /** Where the camera is, as an orbit around the character. Angles in radians. */
 export interface Camera {
@@ -43,6 +45,8 @@ interface Frame {
   y1: number;
 }
 
+const FULL_FRAME: Frame = { x0: -1, x1: 1, y0: -1, y1: 1 };
+
 /** One mesh's buffers on the graphics card. */
 interface GpuMesh {
   vao: WebGLVertexArrayObject;
@@ -73,11 +77,13 @@ const UNIFORMS = [
   'u_ambient', 'u_light_color', 'u_light_direction', 'u_texture1', 'u_texture2', 'u_texture3', 'u_texture4',
 ] as const;
 
-/** Draws one character scene into a canvas with a transparent background. */
+/** Draws one character scene into a canvas, over a transparent background or a backdrop picture. */
 export class CharacterRenderer {
   private readonly gl: WebGL2RenderingContext;
   private readonly program: WebGLProgram;
   private readonly downsample: WebGLProgram;
+  private readonly backdropProgram: WebGLProgram;
+  private backdrop: WebGLTexture | undefined;
   private readonly uniforms = {} as Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>;
   private readonly white: WebGLTexture;
   private meshes: GpuMesh[] = [];
@@ -93,6 +99,7 @@ export class CharacterRenderer {
     this.gl = gl;
     this.program = link(gl, VERTEX_SOURCE, FRAGMENT_SOURCE);
     this.downsample = link(gl, DOWNSAMPLE_VERTEX_SOURCE, DOWNSAMPLE_FRAGMENT_SOURCE);
+    this.backdropProgram = link(gl, BACKDROP_VERTEX_SOURCE, BACKDROP_FRAGMENT_SOURCE);
     for (const name of UNIFORMS) this.uniforms[name] = gl.getUniformLocation(this.program, name);
 
     this.white = gl.createTexture()!;
@@ -184,6 +191,26 @@ export class CharacterRenderer {
       .map(({ d }) => d);
   }
 
+  /**
+   * The picture drawn behind the character, filling the frame, or none for a transparent
+   * background. It is stretched to the frame, so compose it in the picture's shape.
+   */
+  setBackdrop(source: TexImageSource | undefined): void {
+    const { gl } = this;
+    if (this.backdrop) gl.deleteTexture(this.backdrop);
+    this.backdrop = undefined;
+    if (!source) return;
+    const texture = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.backdrop = texture;
+  }
+
   /** Move the scene's meshes to a new pose (see CharacterRig.pose). */
   setPose(pose: PoseResult): void {
     const { gl } = this;
@@ -204,7 +231,7 @@ export class CharacterRenderer {
     const { gl, canvas } = this;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     const { view, projection, axes } = this.cameraMatrices(camera, canvas.width / canvas.height);
-    this.draw(view, projection, axes, canvas.width, canvas.height);
+    this.draw(view, projection, axes, FULL_FRAME, canvas.width, canvas.height);
   }
 
   /**
@@ -213,7 +240,7 @@ export class CharacterRenderer {
    */
   renderImage(camera: Camera, options: ImageOptions): Image {
     let aspect = options.aspect;
-    let frame: Frame = { x0: -1, x1: 1, y0: -1, y1: 1 };
+    let frame = FULL_FRAME;
     if (options.tight) {
       // Find the character in a small draft, then aim the full-size picture at just that part.
       const draftWidth = aspect >= 1 ? 512 : Math.round(512 * aspect);
@@ -287,7 +314,7 @@ export class CharacterRenderer {
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
         throw new Error('The graphics card could not allocate the picture');
       }
-      this.draw(view, projection, axes, bigWidth, bigHeight);
+      this.draw(view, projection, axes, frame, bigWidth, bigHeight);
 
       const target = (texture: WebGLTexture | null, buffer: WebGLFramebuffer | null, w: number, h: number) => {
         gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -336,14 +363,26 @@ export class CharacterRenderer {
     }
   }
 
-  /** Draw the scene into the bound framebuffer. */
-  private draw(view: Mat4, projection: Mat4, axes: CameraAxes, width: number, height: number): void {
+  /** Draw the backdrop, if any, and the scene into the bound framebuffer. */
+  private draw(view: Mat4, projection: Mat4, axes: CameraAxes, frame: Frame, width: number, height: number): void {
     const { gl, uniforms } = this;
     for (const mesh of this.meshes) this.aimBillboards(mesh, axes);
     gl.viewport(0, 0, width, height);
     gl.clearColor(0, 0, 0, 0);
     gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (this.backdrop) {
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.BLEND);
+      gl.disable(gl.CULL_FACE);
+      gl.useProgram(this.backdropProgram);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.backdrop);
+      gl.uniform1i(gl.getUniformLocation(this.backdropProgram, 'u_backdrop'), 0);
+      gl.uniform4f(gl.getUniformLocation(this.backdropProgram, 'u_frame'), frame.x0, frame.y0, frame.x1, frame.y1);
+      gl.bindVertexArray(null);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
     if (this.draws.length === 0) return;
 
     gl.useProgram(this.program);

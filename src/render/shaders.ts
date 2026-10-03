@@ -246,3 +246,26 @@ void main() {
   frag_color = sum / float(u_factor * u_factor);
 }
 `;
+
+/** A backdrop picture filling the frame behind the character. `u_frame` is the part of the full view being drawn (x0, y0, x1, y1). */
+export const BACKDROP_VERTEX_SOURCE = `#version 300 es
+uniform vec4 u_frame;
+out vec2 v_uv;
+void main() {
+  vec2 corner = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+  // The frame's -1..1 view coordinates for this corner, then the picture's 0..1 with its first row at the top.
+  vec2 view = u_frame.xy + corner * (u_frame.zw - u_frame.xy);
+  v_uv = vec2((view.x + 1.0) * 0.5, 1.0 - (view.y + 1.0) * 0.5);
+}
+`;
+
+export const BACKDROP_FRAGMENT_SOURCE = `#version 300 es
+precision highp float;
+uniform sampler2D u_backdrop;
+in vec2 v_uv;
+out vec4 frag_color;
+void main() {
+  frag_color = vec4(texture(u_backdrop, v_uv).rgb, 1.0);
+}
+`;
