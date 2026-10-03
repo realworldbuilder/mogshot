@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { SLOTS, type Slot } from '../src/character/equipment';
 import { buildCharacterScene, type CharacterRig, type CharacterScene } from '../src/character/scene';
 import { CLIP_FORMATS, clipTimes } from '../src/render/clip';
+import { buildPlace } from '../src/world/place';
 import { capturedAgo } from '../src/import/record';
 import { GRADIENTS } from '../src/render/backdrop';
 import { Darkroom } from './browser';
@@ -169,10 +170,10 @@ async function render(file: string | undefined, session: Session, host: Host): P
   const specs = Array.isArray(parsed) ? parsed : [parsed];
   const base = file === '-' ? process.cwd() : dirname(resolve(file));
 
-  const [appearance, equipment, classes, screens, records] = await Promise.all([
-    session.appearance(), session.equipment(), session.classes(), session.screens(), session.records(),
+  const [appearance, equipment, classes, screens, records, maps] = await Promise.all([
+    session.appearance(), session.equipment(), session.classes(), session.screens(), session.records(), session.maps(),
   ]);
-  const world: World = { appearance, equipment, classes, screens, records };
+  const world: World = { appearance, equipment, classes, screens, records, maps };
 
   let room: Darkroom | undefined;
   let failed = 0;
@@ -185,10 +186,12 @@ async function render(file: string | undefined, session: Session, host: Host): P
         const shot = resolveSpec(spec, world);
         const { scene, rig } = await build(shot, session, world);
         const clip = shot.clip && (await film(shot.clip, scene, rig));
+        const place = shot.place && (await buildPlace(session.storage, shot.place));
         const screen = shot.backdrop.kind === 'screen' ? await session.image(shot.backdrop.fileId) : undefined;
         if (shot.backdrop.kind === 'screen' && !screen) throw new Error('The loading screen could not be read');
         const job: Job = {
           scene, camera: shot.camera, ...shot.size, backdrop: shot.backdrop, screen, classicScreen: shot.classicScreen,
+          place,
           clip: clip && { format: clip.format, fps: clip.fps, framing: clip.framing, poses: clip.poses },
         };
         room ??= await Darkroom.open(await host.harness());
@@ -205,7 +208,8 @@ async function render(file: string | undefined, session: Session, host: Host): P
           sex: sexName(shot.sex),
           pose: scene.pose.preset ?? scene.animations.find((a) => a.sequence === scene.pose.sequence)?.name,
           gear: Object.fromEntries([...shot.gear].map(([slot, item]) => [slot, `${item.name} (${item.id})`])),
-          problems: [...shot.problems, ...scene.problems, ...drawn.problems],
+          ...(place && { place: { ground: place.ground.map((n) => Number(n.toFixed(2))), parts: place.meshes.length, textures: place.textures.length } }),
+          problems: [...shot.problems, ...scene.problems, ...(place?.problems ?? []), ...drawn.problems],
           notes: shot.notes,
           graphics: drawn.graphics,
         });

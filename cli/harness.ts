@@ -25,6 +25,7 @@ async function shoot(): Promise<Drawn> {
   const { width, height } = job;
   const backdrop = composeBackdrop(job.backdrop, width, height, job.screen, job.classicScreen ? CLASSIC_SCREEN_ASPECT : undefined);
   renderer.setBackdrop(backdrop);
+  renderer.setPlace(job.place);
   const { clip } = job;
   if (clip) {
     const view = renderer;
@@ -45,7 +46,7 @@ async function shoot(): Promise<Drawn> {
     return { width, height, frames: clip.poses.length, problems: renderer.problems, graphics: graphics() };
   }
   // With a backdrop the whole frame is the picture; a tight crop is for a character alone.
-  const image = renderer.renderImage(job.camera, { longSide: Math.max(width, height), aspect: width / height, tight: job.tight && !backdrop });
+  const image = renderer.renderImage(job.camera, { longSide: Math.max(width, height), aspect: width / height, tight: job.tight && !backdrop && !job.place });
   unpremultiply(image.pixels);
   const png = await encodePng(image);
   await fetch(PICTURE_PATH, { method: 'POST', body: png as BodyInit });

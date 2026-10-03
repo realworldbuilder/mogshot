@@ -124,3 +124,39 @@ export function invert(out: Mat4, m: Mat4): Mat4 {
   out[15] = (a20 * b03 - a21 * b01 + a22 * b00) * d;
   return out;
 }
+
+export function translation(x: number, y: number, z: number): Mat4 {
+  const out = identity();
+  out[12] = x;
+  out[13] = y;
+  out[14] = z;
+  return out;
+}
+
+/** A turn about one of the axes, anticlockwise seen from the axis's positive end. */
+export function rotation(axis: 'x' | 'y' | 'z', radians: number): Mat4 {
+  const out = identity();
+  const c = Math.cos(radians);
+  const s = Math.sin(radians);
+  if (axis === 'x') {
+    out[5] = c; out[6] = s; out[9] = -s; out[10] = c;
+  } else if (axis === 'y') {
+    out[0] = c; out[2] = -s; out[8] = s; out[10] = c;
+  } else {
+    out[0] = c; out[1] = s; out[4] = -s; out[5] = c;
+  }
+  return out;
+}
+
+export function scaling(s: number): Mat4 {
+  const out = identity();
+  out[0] = out[5] = out[10] = s;
+  return out;
+}
+
+/** The product of matrices, left to right: the last one is applied to a point first. */
+export function chain(...matrices: Mat4[]): Mat4 {
+  let out = identity();
+  for (const m of matrices) out = multiply(new Float32Array(16), out, m);
+  return out;
+}

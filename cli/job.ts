@@ -3,6 +3,7 @@ import type { Image } from '../src/formats/blp';
 import type { Backdrop } from '../src/render/backdrop';
 import type { ClipFormat } from '../src/render/clip';
 import type { Camera } from '../src/render/renderer';
+import type { PlaceScene } from '../src/world/place';
 
 /** One picture for the page to draw. Crosses from Node packed by `wire.ts`. */
 export interface Job {
@@ -15,6 +16,8 @@ export interface Job {
   /** The loading screen's pixels, when the backdrop is one. */
   screen?: Image;
   classicScreen: boolean;
+  /** The world the character stands in, if any. */
+  place?: PlaceScene;
   /** Draw a clip instead of a picture: the scene in each of these poses, one a frame. */
   clip?: {
     format: ClipFormat;

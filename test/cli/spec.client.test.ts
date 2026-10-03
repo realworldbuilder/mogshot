@@ -19,7 +19,7 @@ describe.skipIf(!hasClient)('a spec', () => {
   beforeAll(async () => {
     const session = await Session.open(WOW_DIR, join(ROOT, 'node_modules', '.cache', 'mogshot', 'cli'));
     const [appearance, equipment, classes, screens] = await Promise.all([session.appearance(), session.equipment(), session.classes(), session.screens()]);
-    world = { appearance, equipment, classes, screens, records: [] };
+    world = { appearance, equipment, classes, screens, records: [], maps: await session.maps() };
   }, 120_000);
 
   it('places names: race, set, item, choice, size, gradient', () => {

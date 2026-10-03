@@ -269,3 +269,71 @@ void main() {
   frag_color = vec4(texture(u_backdrop, v_uv).rgb, 1.0);
 }
 `;
+
+/*
+ * The world around the character: buildings as stored, lit by a fixed sun and sky outdoors
+ * and by their baked light indoors, fading into the haze with distance.
+ */
+export const PLACE_VERTEX_SOURCE = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec2 a_texcoord;
+layout(location = 3) in vec4 a_baked;
+
+uniform mat4 u_view;
+uniform mat4 u_projection;
+uniform mat4 u_model;
+
+out vec2 v_texcoord;
+out vec3 v_normal;
+out vec4 v_baked;
+out float v_distance;
+
+void main() {
+  vec4 position_view = u_view * u_model * vec4(a_position, 1.0);
+  gl_Position = u_projection * position_view;
+  v_texcoord = a_texcoord;
+  v_normal = mat3(u_model) * a_normal;
+  v_baked = a_baked;
+  v_distance = length(position_view.xyz);
+}
+`;
+
+export const PLACE_FRAGMENT_SOURCE = `#version 300 es
+precision highp float;
+
+in vec2 v_texcoord;
+in vec3 v_normal;
+in vec4 v_baked;
+in float v_distance;
+
+uniform sampler2D u_texture;
+uniform int u_blend_mode;
+uniform bool u_outdoors;
+uniform bool u_unlit;
+// The sun's direction in the character's space, and the colours of sun, sky and haze.
+uniform vec3 u_sun_direction;
+uniform vec3 u_sun_color;
+uniform vec3 u_ambient;
+uniform vec3 u_haze;
+uniform float u_reach;
+
+out vec4 out_color;
+
+void main() {
+  vec4 texel = texture(u_texture, v_texcoord);
+  if (u_blend_mode == 1 && texel.a < 0.5) discard;
+  vec3 normal = normalize(gl_FrontFacing ? v_normal : -v_normal);
+  vec3 light = v_baked.rgb * 2.0;
+  if (u_outdoors) light = u_ambient + u_sun_color * max(dot(normal, u_sun_direction), 0.0) + v_baked.rgb;
+  if (u_unlit) light = vec3(1.0);
+  vec3 color = texel.rgb * light;
+  // Haze: none near the character, complete at the edge of what is drawn.
+  float haze = smoothstep(u_reach * 0.25, u_reach, v_distance);
+  color = mix(color, u_haze, haze);
+  float alpha = u_blend_mode > 1 ? texel.a : 1.0;
+  out_color = vec4(color * alpha, alpha);
+}
+`;

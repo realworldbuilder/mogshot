@@ -3,9 +3,11 @@ import { VERTEX_SIZE } from '../formats/m2';
 import type { Image } from '../formats/blp';
 import { invert, lookAt, type Mat4, multiply, perspective, transformPoint } from '../math/mat4';
 import { alphaBounds } from './export';
+import { PLACE_VERTEX_SIZE, type PlaceDraw, type PlaceScene } from '../world/place';
 import { combiners } from './shader-table';
 import {
-  BACKDROP_FRAGMENT_SOURCE, BACKDROP_VERTEX_SOURCE, DOWNSAMPLE_FRAGMENT_SOURCE, DOWNSAMPLE_VERTEX_SOURCE, FRAGMENT_SOURCE, VERTEX_SOURCE,
+  BACKDROP_FRAGMENT_SOURCE, BACKDROP_VERTEX_SOURCE, DOWNSAMPLE_FRAGMENT_SOURCE, DOWNSAMPLE_VERTEX_SOURCE, FRAGMENT_SOURCE,
+  PLACE_FRAGMENT_SOURCE, PLACE_VERTEX_SOURCE, VERTEX_SOURCE,
 } from './shaders';
 
 /** Where the camera is, as an orbit around the character. Angles in radians. */
@@ -72,6 +74,17 @@ interface PreparedDraw {
   pixelShader: number;
 }
 
+/** A place's buffers on the graphics card. */
+interface GpuPlace {
+  meshes: { vao: WebGLVertexArrayObject; vertexBuffer: WebGLBuffer; indexBuffer: WebGLBuffer; outdoors: boolean; draws: PlaceDraw[] }[];
+  textures: WebGLTexture[];
+  transform: Float32Array;
+  reach: number;
+}
+
+/** The haze the world fades into, and the sky where nothing is drawn. */
+const HAZE = [0.62, 0.71, 0.8] as const;
+
 const UNIFORMS = [
   'u_view', 'u_projection', 'u_model', 'u_bones', 'u_vertex_shader', 'u_pixel_shader', 'u_blend_mode', 'u_unlit',
   'u_ambient', 'u_light_color', 'u_light_direction', 'u_texture1', 'u_texture2', 'u_texture3', 'u_texture4',
@@ -84,6 +97,8 @@ export class CharacterRenderer {
   private readonly downsample: WebGLProgram;
   private readonly backdropProgram: WebGLProgram;
   private backdrop: WebGLTexture | undefined;
+  private readonly placeProgram: WebGLProgram;
+  private place: GpuPlace | undefined;
   private readonly uniforms = {} as Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>;
   private readonly white: WebGLTexture;
   private meshes: GpuMesh[] = [];
@@ -102,6 +117,7 @@ export class CharacterRenderer {
     this.program = link(gl, VERTEX_SOURCE, FRAGMENT_SOURCE);
     this.downsample = link(gl, DOWNSAMPLE_VERTEX_SOURCE, DOWNSAMPLE_FRAGMENT_SOURCE);
     this.backdropProgram = link(gl, BACKDROP_VERTEX_SOURCE, BACKDROP_FRAGMENT_SOURCE);
+    this.placeProgram = link(gl, PLACE_VERTEX_SOURCE, PLACE_FRAGMENT_SOURCE);
     for (const name of UNIFORMS) this.uniforms[name] = gl.getUniformLocation(this.program, name);
 
     this.white = gl.createTexture()!;
@@ -157,23 +173,7 @@ export class CharacterRenderer {
     });
 
     for (const texture of this.textures) gl.deleteTexture(texture);
-    const anisotropy = gl.getExtension('EXT_texture_filter_anisotropic');
-    this.textures = scene.textures.map((image) => {
-      const texture = gl.createTexture()!;
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, image.width, image.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, image.pixels);
-      gl.generateMipmap(gl.TEXTURE_2D);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, image.wrapX ? gl.REPEAT : gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, image.wrapY ? gl.REPEAT : gl.CLAMP_TO_EDGE);
-      if (anisotropy) {
-        const max = gl.getParameter(anisotropy.MAX_TEXTURE_MAX_ANISOTROPY_EXT) as number;
-        gl.texParameterf(gl.TEXTURE_2D, anisotropy.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, max));
-      }
-      return texture;
-    });
+    this.textures = scene.textures.map((image) => this.upload(image));
 
     const prepared: PreparedDraw[] = [];
     scene.meshes.forEach((mesh, meshIndex) => {
@@ -194,6 +194,26 @@ export class CharacterRenderer {
       .map(({ d }) => d);
   }
 
+  /** A texture with mipmaps, wrapping as the image says. */
+  private upload(image: CharacterScene['textures'][number]): WebGLTexture {
+    const { gl } = this;
+    const anisotropy = gl.getExtension('EXT_texture_filter_anisotropic');
+    const texture = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, image.width, image.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, image.pixels);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, image.wrapX ? gl.REPEAT : gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, image.wrapY ? gl.REPEAT : gl.CLAMP_TO_EDGE);
+    if (anisotropy) {
+      const max = gl.getParameter(anisotropy.MAX_TEXTURE_MAX_ANISOTROPY_EXT) as number;
+      gl.texParameterf(gl.TEXTURE_2D, anisotropy.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, max));
+    }
+    return texture;
+  }
+
   /**
    * The picture drawn behind the character, filling the frame, or none for a transparent
    * background. It is stretched to the frame, so compose it in the picture's shape.
@@ -212,6 +232,42 @@ export class CharacterRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     this.backdrop = texture;
+  }
+
+  /** The world drawn around the character, or none. The character stands at the place's spot. */
+  setPlace(place: PlaceScene | undefined): void {
+    const { gl } = this;
+    if (this.place) {
+      for (const mesh of this.place.meshes) {
+        gl.deleteVertexArray(mesh.vao);
+        gl.deleteBuffer(mesh.vertexBuffer);
+        gl.deleteBuffer(mesh.indexBuffer);
+      }
+      for (const texture of this.place.textures) gl.deleteTexture(texture);
+    }
+    this.place = undefined;
+    if (!place) return;
+    const meshes = place.meshes.map((mesh) => {
+      const vao = gl.createVertexArray()!;
+      const vertexBuffer = gl.createBuffer()!;
+      const indexBuffer = gl.createBuffer()!;
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, mesh.vertices, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, PLACE_VERTEX_SIZE, 0);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, PLACE_VERTEX_SIZE, 12);
+      gl.enableVertexAttribArray(2);
+      gl.vertexAttribPointer(2, 2, gl.FLOAT, false, PLACE_VERTEX_SIZE, 24);
+      gl.enableVertexAttribArray(3);
+      gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, PLACE_VERTEX_SIZE, 32);
+      gl.bindVertexArray(null);
+      return { vao, vertexBuffer, indexBuffer, outdoors: mesh.outdoors, draws: mesh.draws };
+    });
+    this.place = { meshes, textures: place.textures.map((image) => this.upload(image)), transform: place.transform, reach: place.reach };
   }
 
   /** Move the scene's meshes to a new pose (see CharacterRig.pose). */
@@ -379,7 +435,9 @@ export class CharacterRenderer {
     const { gl, uniforms } = this;
     for (const mesh of this.meshes) this.aimBillboards(mesh, axes);
     gl.viewport(0, 0, width, height);
-    gl.clearColor(0, 0, 0, 0);
+    // A place fills the frame: its haze is the sky where nothing stands.
+    if (this.place) gl.clearColor(HAZE[0], HAZE[1], HAZE[2], 1);
+    else gl.clearColor(0, 0, 0, 0);
     gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (this.backdrop) {
@@ -394,6 +452,7 @@ export class CharacterRenderer {
       gl.bindVertexArray(null);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
+    if (this.place) this.drawPlace(this.place, view, projection);
     if (this.draws.length === 0) return;
 
     gl.useProgram(this.program);
@@ -438,6 +497,55 @@ export class CharacterRenderer {
       gl.drawElements(gl.TRIANGLES, draw.indexCount, gl.UNSIGNED_SHORT, draw.indexStart * 2);
     }
 
+    gl.bindVertexArray(null);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+  }
+
+  /** Draw the world: solid surfaces first, then the blended ones over them. */
+  private drawPlace(place: GpuPlace, view: Mat4, projection: Mat4): void {
+    const { gl, placeProgram } = this;
+    const at = (name: string) => gl.getUniformLocation(placeProgram, name);
+    gl.useProgram(placeProgram);
+    gl.uniformMatrix4fv(at('u_view'), false, view);
+    gl.uniformMatrix4fv(at('u_projection'), false, projection);
+    gl.uniformMatrix4fv(at('u_model'), false, place.transform);
+    gl.uniform1i(at('u_texture'), 0);
+    // A mid-morning sun, in the character's space.
+    const sun = [0.35, 0.45, 0.82];
+    const length = Math.hypot(sun[0]!, sun[1]!, sun[2]!);
+    gl.uniform3f(at('u_sun_direction'), sun[0]! / length, sun[1]! / length, sun[2]! / length);
+    gl.uniform3f(at('u_sun_color'), 0.75, 0.7, 0.62);
+    gl.uniform3f(at('u_ambient'), 0.42, 0.45, 0.52);
+    gl.uniform3f(at('u_haze'), HAZE[0], HAZE[1], HAZE[2]);
+    gl.uniform1f(at('u_reach'), place.reach);
+    const outdoors = at('u_outdoors');
+    const blendMode = at('u_blend_mode');
+    const unlit = at('u_unlit');
+
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.activeTexture(gl.TEXTURE0);
+    for (const blended of [false, true]) {
+      gl.depthMask(!blended);
+      if (blended) {
+        gl.enable(gl.BLEND);
+        gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      } else gl.disable(gl.BLEND);
+      for (const mesh of place.meshes) {
+        gl.bindVertexArray(mesh.vao);
+        gl.uniform1i(outdoors, mesh.outdoors ? 1 : 0);
+        for (const draw of mesh.draws) {
+          if (draw.blendMode > 1 !== blended) continue;
+          if (draw.twoSided) gl.disable(gl.CULL_FACE);
+          else gl.enable(gl.CULL_FACE);
+          gl.uniform1i(blendMode, draw.blendMode);
+          gl.uniform1i(unlit, draw.unlit ? 1 : 0);
+          gl.bindTexture(gl.TEXTURE_2D, place.textures[draw.texture] ?? this.white);
+          gl.drawElements(gl.TRIANGLES, draw.indexCount, gl.UNSIGNED_SHORT, draw.indexStart * 2);
+        }
+      }
+    }
     gl.bindVertexArray(null);
     gl.depthMask(true);
     gl.disable(gl.BLEND);
@@ -548,7 +656,8 @@ export class CharacterRenderer {
     ];
     const view = lookAt(eye, target, up);
     const near = Math.max(0.02, (distance - nearest) * 0.5);
-    const far = (distance - farthest) * 1.5 + 1;
+    // With a world around, the view reaches as far as the world is drawn.
+    const far = Math.max((distance - farthest) * 1.5 + 1, this.place ? distance + this.place.reach : 0);
     return { view, projection: perspective(camera.fov, aspect, near, far), axes: { toCamera, right, up } };
   }
 }

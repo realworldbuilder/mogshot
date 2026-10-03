@@ -7,6 +7,8 @@ import { resolveImport } from '../src/import/resolve';
 import { type Backdrop, GRADIENTS, NO_BACKDROP } from '../src/render/backdrop';
 import { CLIP_FPS, type ClipFormat, clipSize, evenSize, GIF_FPS } from '../src/render/clip';
 import { type Camera, DEFAULT_CAMERA } from '../src/render/renderer';
+import type { Spot } from '../src/world/place';
+import type { MapInfo } from './session';
 
 /*
  * A picture as someone writes it down: names where the page has menus, numbers where it has
@@ -37,6 +39,13 @@ export interface Spec {
    * or `seconds` of it going round. 30 frames a second unless said; a GIF is always 25.
    */
   clip?: true | { animation?: string; seconds?: number; fps?: number };
+  /**
+   * Stand the character in the game world: a map by name or number (Eastern Kingdoms unless
+   * said) and the position the game reports there (/script print(UnitPosition("player"))).
+   * `z` picks between floors; `facing` is degrees anticlockwise from north; `reach` is how
+   * many yards of world are drawn. The place fills the frame, in place of a backdrop.
+   */
+  place?: { map?: string | number; x: number; y: number; z?: number; facing?: number; reach?: number };
   camera?: Partial<Camera>;
   size?: string | { width: number; height: number; tight?: boolean };
   backdrop?:
@@ -76,6 +85,8 @@ export interface Shot {
   animation?: { name: string; at: number };
   /** A clip to film instead of a picture to take. */
   clip?: { format: ClipFormat; animation?: string; seconds?: number; fps: number };
+  /** Where in the game world the character stands, if anywhere. */
+  place?: Spot;
   camera: Camera;
   size: PictureSize;
   backdrop: Backdrop;
@@ -91,6 +102,7 @@ export interface World {
   classes: ClassInfo[];
   screens: LoadingScreen[];
   records: ImportedRecord[];
+  maps: MapInfo[];
 }
 
 const plain = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -233,6 +245,17 @@ function clipSizeOf(ref: Spec['size'], format: ClipFormat): PictureSize {
   return { ...size, tight: false };
 }
 
+function placeOf(ref: Spec['place'], maps: readonly MapInfo[]): Spot | undefined {
+  if (!ref) return undefined;
+  if (![ref.x, ref.y].every(Number.isFinite)) throw new Error('A place needs the x and y the game reports for the spot');
+  const map =
+    typeof ref.map === 'number' ? maps.find((m) => m.id === ref.map) : byName(maps, ref.map ?? 'Eastern Kingdoms', 'map', (m) => [m.name, m.directory]);
+  if (!map) throw new Error(`There is no map number ${ref.map} with a world on disk`);
+  const reach = ref.reach ?? 300;
+  if (!(reach >= 20 && reach <= 1500)) throw new Error('A place reaches 20 to 1500 yards');
+  return { wdtFileId: map.wdtFileId, x: ref.x, y: ref.y, z: ref.z, facing: ((ref.facing ?? 0) * Math.PI) / 180, reach };
+}
+
 const radians = (degrees: number) => (degrees * Math.PI) / 180;
 
 function cameraOf(ref: Spec['camera']): Camera {
@@ -307,8 +330,9 @@ export function resolveSpec(spec: Spec, world: World): Shot {
     pose,
     animation,
     clip,
+    place: placeOf(spec.place, world.maps),
     camera: cameraOf(spec.camera),
-    size: clip ? clipSizeOf(spec.size, clip.format) : sizeOf(spec.size),
+    size: clip ? clipSizeOf(spec.size, clip.format) : spec.place ? { ...sizeOf(spec.size ?? '1080p'), tight: false } : sizeOf(spec.size),
     ...backdropOf(spec.backdrop, world.screens),
     problems,
     notes,

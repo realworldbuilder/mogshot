@@ -11,12 +11,21 @@ import { type ImportedRecord, mergeRecords, recordsFromSavedVariables } from '..
 import { NodeSource } from '../src/io/node-source';
 import { FileCache } from './file-cache';
 
+/** A map of the game world: a continent, or an instance with its own outdoors. */
+export interface MapInfo {
+  id: number;
+  name: string;
+  directory: string;
+  wdtFileId: number;
+}
+
 /** An open game folder and what has been read from it so far. The command line's counterpart of the page's data worker. */
 export class Session {
   private appearancePromise: Promise<Appearance> | undefined;
   private equipmentPromise: Promise<Equipment> | undefined;
   private screensPromise: Promise<LoadingScreen[]> | undefined;
   private recordsPromise: Promise<ImportedRecord[]> | undefined;
+  private mapsPromise: Promise<MapInfo[]> | undefined;
 
   private constructor(
     readonly dir: string,
@@ -48,6 +57,17 @@ export class Session {
     const files = this.storage.files;
     return (this.screensPromise ??= loadLoadingScreens(this.database).then((list) =>
       list.filter((screen) => files.find(screen.fileId) !== undefined),
+    ));
+  }
+
+  /** The maps that have an outdoor world on disk. */
+  maps(): Promise<MapInfo[]> {
+    return (this.mapsPromise ??= this.database.table('Map', ['MapName_lang', 'Directory', 'WdtFileDataID']).then((table) =>
+      table.rows.flatMap((row) => {
+        const wdtFileId = Number(row.WdtFileDataID);
+        if (!wdtFileId || this.storage.files.find(wdtFileId) === undefined) return [];
+        return [{ id: Number(row.ID), name: String(row.MapName_lang), directory: String(row.Directory), wdtFileId }];
+      }),
     ));
   }
 
