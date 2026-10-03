@@ -65,7 +65,7 @@ export function ImportPanel({ data, records, recordsError, selectedKey, onImport
     if (!pasting || code.trim() === '') return;
     const record = decodeRecord(code);
     if (!record) {
-      setNote({ text: 'That is not a Mogshot code. It starts with MOG1; the addon shows it after /mogshot.', bad: true });
+      setNote({ text: 'That is not a Mogshot code. It starts with MOG2; the addon shows it after /mogshot.', bad: true });
       return;
     }
     load(record);
@@ -98,7 +98,7 @@ export function ImportPanel({ data, records, recordsError, selectedKey, onImport
         <input
           id="import-code"
           type="text"
-          placeholder="MOG1;…"
+          placeholder="MOG2;…"
           aria-label="Mogshot code"
           value={code}
           ref={(input) => input?.focus()}

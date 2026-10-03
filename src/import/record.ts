@@ -41,11 +41,23 @@ export interface ImportedRecord {
   captured: number;
 }
 
-const CODE_TAG = 'MOG1';
+/** The first, long form of the code, still read. */
+const CODE_TAG_LONG = 'MOG1';
+const CODE_TAG = 'MOG2';
+
+/** One capital letter per slot in the short code; the item id follows in base 36, lower case. */
+const SLOT_LETTERS: Record<ImportSlot, string> = {
+  head: 'H', shoulder: 'S', back: 'B', chest: 'C', shirt: 'T', tabard: 'A', wrist: 'W', hands: 'G',
+  waist: 'N', legs: 'P', feet: 'F', mainHand: 'M', offHand: 'O', ranged: 'R',
+};
 
 function num(value: unknown): number | undefined {
   const n = typeof value === 'number' ? value : typeof value === 'string' && value !== '' ? Number(value) : NaN;
   return Number.isFinite(n) ? n : undefined;
+}
+
+function base36(text: string): number | undefined {
+  return /^[0-9a-z]+$/.test(text) ? parseInt(text, 36) : undefined;
 }
 
 function splitKey(key: string): { name: string; realm: string } {
@@ -53,31 +65,55 @@ function splitKey(key: string): { name: string; realm: string } {
   return dash < 0 ? { name: key, realm: '' } : { name: key.slice(0, dash), realm: key.slice(dash + 1) };
 }
 
-/** The record as a code the player can paste. Fields are `;`-separated; no `|`, which the game eats. */
+/**
+ * The record as a short code the player can paste:
+ * `MOG2;Name-Realm;race;sex;class;gear;choices`. The race is its id (or its file name when
+ * the id is unknown), gear is a letter per slot followed by the item id in base 36, and
+ * choices are choice ids in base 36 separated by dots (a choice id names its option).
+ * Item names and the capture time are left out. No `|`, which the game eats.
+ */
 export function encodeRecord(record: ImportedRecord): string {
-  const gear = IMPORT_SLOTS.filter((slot) => record.gear[slot]).map((slot) => `${slot}:${record.gear[slot]}`);
-  const choices = record.choices.map(([option, choice]) => `${option}:${choice}`);
-  // Names are percent-encoded, so no separator can appear in one.
-  const items = Object.entries(record.items ?? {}).map(([id, item]) => `${id}:${item.quality}:${encodeURIComponent(item.name)}`);
-  return [
-    CODE_TAG,
-    record.key,
-    record.race,
-    record.raceId ?? '',
-    record.sex,
-    record.classId ?? '',
-    record.className ?? '',
-    record.captured || '',
-    gear.join(','),
-    choices.join(','),
-    ...(items.length > 0 ? [items.join(',')] : []),
-  ].join(';');
+  const gear = IMPORT_SLOTS.filter((slot) => record.gear[slot]).map((slot) => SLOT_LETTERS[slot] + record.gear[slot]!.toString(36));
+  const choices = record.choices.map(([, choice]) => choice.toString(36));
+  return [CODE_TAG, record.key, record.raceId ?? record.race, record.sex, record.classId ?? '', gear.join(''), choices.join('.')].join(';');
+}
+
+function decodeShort(fields: string[]): ImportedRecord | undefined {
+  const [, key = '', raceText = '', sex, classId, gearText = '', choicesText = ''] = fields;
+  const gear: ImportedRecord['gear'] = {};
+  for (const [, letter, id] of gearText.matchAll(/([A-Z])([0-9a-z]+)/g)) {
+    const slot = IMPORT_SLOTS.find((s) => SLOT_LETTERS[s] === letter);
+    const itemId = base36(id!);
+    if (slot && itemId) gear[slot] = itemId;
+  }
+  const choices: [number, number][] = [];
+  for (const text of choicesText.split('.').filter(Boolean)) {
+    const choice = base36(text);
+    // The option is found from the choice when the record is resolved.
+    if (choice) choices.push([0, choice]);
+  }
+  const sexNumber = num(sex);
+  const raceId = /^\d+$/.test(raceText) ? Number(raceText) : undefined;
+  if (!key || !raceText || (sexNumber !== 0 && sexNumber !== 1)) return undefined;
+  return {
+    key,
+    ...splitKey(key),
+    race: raceId === undefined ? raceText : '',
+    raceId,
+    sex: sexNumber,
+    classId: num(classId),
+    className: undefined,
+    gear,
+    choices,
+    captured: 0,
+  };
 }
 
 /** A record from a pasted code, or undefined if the text is not one. */
 export function decodeRecord(text: string): ImportedRecord | undefined {
   const fields = text.trim().split(';');
-  if (fields[0] !== CODE_TAG || fields.length < 10) return undefined;
+  if (fields[0] === CODE_TAG) return fields.length >= 5 ? decodeShort(fields) : undefined;
+  if (fields[0] !== CODE_TAG_LONG || fields.length < 10) return undefined;
   const [, key = '', race = '', raceId, sex, classId, className, captured, gearText = '', choicesText = '', itemsText = ''] = fields;
   const gear: ImportedRecord['gear'] = {};
   for (const pair of gearText.split(',').filter(Boolean)) {

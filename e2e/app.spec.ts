@@ -503,7 +503,7 @@ test('random look, random epics, and the best set for a class', async ({ page })
 });
 
 /** A warrior orc female wearing Lionheart Helm and Thunderfury, as the addon would encode her. */
-const ORC_CODE = 'MOG1;Thrall-Whitemane;Orc;2;1;1;WARRIOR;;head:12640,mainHand:19019;';
+const ORC_CODE = 'MOG2;Thrall-Whitemane;2;1;1;H9r4Meob;';
 
 test('imports a character from a pasted code and keeps the look given to her', async ({ page }) => {
   await load(page, false);

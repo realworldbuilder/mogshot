@@ -29,7 +29,7 @@ export function resolveImport(record: ImportedRecord, appearance: Appearance, eq
   const race =
     appearance.races.find((r) => r.id === record.raceId) ??
     appearance.races.find((r) => r.file.toLowerCase() === record.race.toLowerCase());
-  if (!race) throw new Error(`The game data has no race called ${record.race} that a player can create`);
+  if (!race) throw new Error(`The game data has no race called ${record.race || `number ${record.raceId}`} that a player can create`);
   let sex = record.sex;
   if (!race.sexes.includes(sex)) {
     sex = race.sexes[0] ?? 0;
@@ -41,7 +41,9 @@ export function resolveImport(record: ImportedRecord, appearance: Appearance, eq
   const model = appearance.model(race.id, sex);
   const options = model ? appearance.options(model.chrModelId) : [];
   for (const [option, choice] of record.choices) {
-    if (options.some((o) => o.id === option && o.choices.some((c) => c.id === choice))) choices.push([option, choice]);
+    // The short code gives only the choice (option 0): a choice belongs to one option.
+    const owner = options.find((o) => (option === 0 || o.id === option) && o.choices.some((c) => c.id === choice));
+    if (owner) choices.push([owner.id, choice]);
   }
   const choicesApplied = record.choices.length > 0 ? { applied: choices.length, of: record.choices.length } : undefined;
   if (choicesApplied && choicesApplied.applied < choicesApplied.of) {

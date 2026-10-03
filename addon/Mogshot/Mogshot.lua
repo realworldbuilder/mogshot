@@ -96,31 +96,40 @@ local function capture(undressing)
 	return entry, items
 end
 
--- The same record as one line to paste into the page. No "|", which the game eats.
+-- One capital letter per slot in the code; the item id follows in base 36.
+local LETTERS = {
+	head = "H", shoulder = "S", back = "B", chest = "C", shirt = "T", tabard = "A", wrist = "W", hands = "G",
+	waist = "N", legs = "P", feet = "F", mainHand = "M", offHand = "O", ranged = "R",
+}
+
+local DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz"
+local function base36(n)
+	n = math.floor(n)
+	if n <= 0 then return "0" end
+	local out = ""
+	while n > 0 do
+		local d = n % 36
+		out = DIGITS:sub(d + 1, d + 1) .. out
+		n = (n - d) / 36
+	end
+	return out
+end
+
+-- The record as a short code to paste into the page:
+-- MOG2;Name-Realm;race;sex;class;gear;choices. No "|", which the game eats.
 local function code(entry)
 	local gear, choices = {}, {}
 	for _, slot in ipairs(SLOTS) do
 		local id = entry.gear and entry.gear[slot[1]]
-		if id then gear[#gear + 1] = slot[1] .. ":" .. id end
+		if id then gear[#gear + 1] = LETTERS[slot[1]] .. base36(id) end
 	end
 	local options = {}
 	for option in pairs(entry.choices or {}) do options[#options + 1] = option end
 	table.sort(options)
-	for _, option in ipairs(options) do choices[#choices + 1] = option .. ":" .. entry.choices[option] end
-	-- Names are percent-encoded so no separator can appear in one.
-	local names = {}
-	for _, slot in ipairs(SLOTS) do
-		local id = entry.gear and entry.gear[slot[1]]
-		local item = id and entry.items and entry.items[id]
-		if item then
-			local safe = item.name:gsub("[^%w]", function(c) return ("%%%02X"):format(c:byte()) end)
-			names[#names + 1] = id .. ":" .. (item.quality or 1) .. ":" .. safe
-		end
-	end
+	for _, option in ipairs(options) do choices[#choices + 1] = base36(entry.choices[option]) end
 	local fields = {
-		"MOG1", key() or "", entry.race or "", entry.raceId or "", (entry.sex or 2) - 2,
-		entry.classId or "", entry.class or "", entry.t or "", table.concat(gear, ","), table.concat(choices, ","),
-		table.concat(names, ","),
+		"MOG2", key() or "", entry.raceId or entry.race or "", (entry.sex or 2) - 2, entry.classId or "",
+		table.concat(gear), table.concat(choices, "."),
 	}
 	return (table.concat(fields, ";"):gsub("|", ""))
 end

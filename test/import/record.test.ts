@@ -26,18 +26,30 @@ const thrall: ImportedRecord = {
 };
 
 describe('imported character records', () => {
-  it('round-trips through the paste code', () => {
+  it('writes a short code and reads it back', () => {
     const code = encodeRecord(thrall);
-    expect(code).toBe('MOG1;Thrall-Whitemane;Orc;2;0;7;SHAMAN;1790216430;head:16963,mainHand:19019,ranged:18713;24:1341,25:1402');
-    expect(decodeRecord(code)).toEqual(thrall);
-    expect(decodeRecord(`  ${code}\n`)).toEqual(thrall);
+    expect(code).toBe('MOG2;Thrall-Whitemane;2;0;7;Hd37MeobReft;119.12y');
+    // Names, the time and the option ids are left out; a choice id names its option.
+    expect(decodeRecord(`  ${code}\n`)).toEqual({
+      ...thrall,
+      race: '',
+      className: undefined,
+      captured: 0,
+      choices: [[0, 1341], [0, 1402]],
+    });
+    // Without a race id the race's file name stands in; without gear the field is empty.
+    const bare = { ...thrall, raceId: undefined, classId: undefined, gear: {}, choices: [] };
+    expect(encodeRecord(bare)).toBe('MOG2;Thrall-Whitemane;Orc;0;;;');
+    expect(decodeRecord('MOG2;Thrall-Whitemane;Orc;0;;;')).toEqual(expect.objectContaining({ race: 'Orc', raceId: undefined, gear: {}, choices: [] }));
+    expect(decodeRecord('MOG2;Thrall-Whitemane;2;7')).toBeUndefined();
+    expect(decodeRecord('MOG2;Thrall-Whitemane;2;0;7;Zd37Hd37X;')).toEqual(expect.objectContaining({ gear: { head: 16963 } }));
   });
 
-  it('carries item names through the code, whatever characters they hold', () => {
-    const named = { ...thrall, items: { 16963: { name: 'Helm of Wrath', quality: 4 }, 19019: { name: 'Thunderfury, Blessed: Blade; 100%', quality: 5 } } };
-    const code = encodeRecord(named);
-    expect(code.split(';')).toHaveLength(11);
-    expect(decodeRecord(code)).toEqual(named);
+  it('still reads the first, long form of the code, with item names', () => {
+    const code = 'MOG1;Thrall-Whitemane;Orc;2;0;7;SHAMAN;1790216430;head:16963,mainHand:19019,ranged:18713;24:1341,25:1402';
+    expect(decodeRecord(code)).toEqual(thrall);
+    const named = { ...thrall, items: { 19019: { name: 'Thunderfury, Blessed: Blade; 100%', quality: 5 } } };
+    expect(decodeRecord(`${code};19019:5:${encodeURIComponent(named.items[19019].name)}`)).toEqual(named);
   });
 
   it('decodes a code with empty fields, and refuses what is not a code', () => {

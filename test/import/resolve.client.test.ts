@@ -77,6 +77,8 @@ describe.skipIf(!hasClient)('imported characters', () => {
     );
     expect(result.choices).toEqual([[own.id, ownChoice]]);
     expect(result.choicesApplied).toEqual({ applied: 1, of: 2 });
+    // The short code gives a choice without its option.
+    expect(resolveImport(record({ raceId: 2, race: '', choices: [[0, ownChoice]] }), appearance, equipment).choices).toEqual([[own.id, ownChoice]]);
     expect(result.problems).toEqual(['1 of 2 captured appearance choices fit Orc female']);
   });
 
