@@ -548,6 +548,9 @@ test('lists the characters the addon captured in the game folder', async ({ page
   await redraw(page, () => page.locator('#imported').selectOption(first!));
   await expect(page.locator('#import-note')).toContainText('items found');
   await expect(page.locator('#imported')).toHaveValue(first!);
+  console.log('import note:', await page.locator('#import-note').innerText());
+  console.log('problems:', await problemsShown(page));
+  await page.screenshot({ path: 'test-results/page-own-character.png', fullPage: true });
 });
 
 test('puts a backdrop behind the character, saves it on its own, and remembers it', async ({ page }) => {
