@@ -231,7 +231,18 @@ frame:SetScript("OnEvent", function(_, event)
 end)
 
 SLASH_MOGSHOT1 = "/mogshot"
-SlashCmdList["MOGSHOT"] = function()
+SlashCmdList["MOGSHOT"] = function(message)
+	if message and message:lower():match("^%s*spot") then
+		-- Where the character stands, as a line to paste into the page's Place box.
+		-- The game gives addons no position inside dungeons and raids, and never the height.
+		local x, y, _, map = UnitPosition("player")
+		if not x then
+			say("the game does not tell addons the position in here. Try outdoors or in a city.")
+			return
+		end
+		say(("spot %d %.1f %.1f %d  (paste this line into Place on the page)"):format(map, x, y, math.floor(math.deg(GetPlayerFacing() or 0) + 0.5)))
+		return
+	end
 	local ok, entry, items = pcall(capture)
 	if not ok or not entry then
 		say("could not read this character: " .. tostring(entry))
