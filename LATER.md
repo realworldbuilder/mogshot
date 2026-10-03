@@ -2,7 +2,7 @@
 
 Ideas that are not the one job (folder → character → pose → transparent PNG). One line each. None of these is built until version 1 is public and the owner picks one.
 
-- Backgrounds, scenes and places
+- Scenes and places behind the character: the 3D character-select screens, zones (the game's 2D loading screens are in)
 - Sky and weather
 - Video and GIF export
 - Animation sequences

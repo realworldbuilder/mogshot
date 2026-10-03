@@ -549,3 +549,94 @@ test('lists the characters the addon captured in the game folder', async ({ page
   await expect(page.locator('#import-note')).toContainText('items found');
   await expect(page.locator('#imported')).toHaveValue(first!);
 });
+
+test('puts a backdrop behind the character, saves it on its own, and remembers it', async ({ page }) => {
+  await load(page, false);
+  await openAndDraw(page);
+  await page.locator('#size').selectOption('youtube');
+
+  const saveAs = async (button: string, file: string, name: RegExp) => {
+    const [download] = await Promise.all([page.waitForEvent('download'), page.locator(button).click()]);
+    expect(download.suggestedFilename()).toMatch(name);
+    const path = `test-results/${file}.png`;
+    await download.saveAs(path);
+    await expect(page.locator('#export-note')).toContainText('Saved');
+    console.log(file, await page.locator('#export-note').innerText());
+    return decodePng(readFileSync(path));
+  };
+  const opaque = (image: ReturnType<typeof decodePng>) => {
+    let clear = 0;
+    for (let i = 3; i < image.pixels.length; i += 4) if (image.pixels[i] !== 255) clear++;
+    return clear === 0;
+  };
+  const pixel = (image: ReturnType<typeof decodePng>, x: number, y: number) => [...image.pixels.subarray((y * image.width + x) * 4, (y * image.width + x) * 4 + 3)];
+
+  // A gradient: the picture is opaque, at the preset's size, dark red at the corners.
+  await page.locator('#backdrop-kind').selectOption('gradient:Ember');
+  await expect(page.locator('#canvas')).toHaveAttribute('data-backdrop', 'ember');
+  await expect(page.locator('.hint')).toContainText('part of the picture');
+  const withGradient = await saveAs('#download', 'backdrop-gradient', /^mogshot-human-male\.png$/);
+  expect([withGradient.width, withGradient.height]).toEqual([1280, 720]);
+  expect(opaque(withGradient)).toBe(true);
+  const [r, g, b] = pixel(withGradient, 0, 0) as [number, number, number];
+  expect(r).toBeGreaterThan(g);
+  expect(r).toBeLessThan(100);
+  expect(g).toBeLessThan(50);
+  expect(b).toBeLessThan(50);
+
+  // The backdrop alone is the same size and matches the picture where the character is not.
+  const alone = await saveAs('#download-backdrop', 'backdrop-only', /^mogshot-backdrop-ember\.png$/);
+  expect([alone.width, alone.height]).toEqual([1280, 720]);
+  expect(opaque(alone)).toBe(true);
+  for (const [x, y] of [[0, 0], [1279, 0], [0, 719], [1279, 719]] as const) {
+    const a = pixel(alone, x, y);
+    const b = pixel(withGradient, x, y);
+    for (let c = 0; c < 3; c++) expect(Math.abs(a[c]! - b[c]!)).toBeLessThanOrEqual(2);
+  }
+
+  // The tight preset saves the whole preview when there is a backdrop.
+  await page.locator('#size').selectOption('tight');
+  const tall = await saveAs('#download', 'backdrop-tight', /^mogshot-human-male\.png$/);
+  expect([tall.width, tall.height]).toEqual([2880, 3840]);
+  expect(opaque(tall)).toBe(true);
+  await page.locator('#size').selectOption('youtube');
+
+  // A loading screen by name, blurred and vignetted.
+  const names = await page.locator('#backdrop-kind optgroup[label="Loading screen"] option').allTextContents();
+  console.log('loading screens offered:', names.length);
+  expect(names.length).toBeGreaterThan(40);
+  const kalimdor = names.find((name) => name.startsWith('Kalimdor'));
+  expect(kalimdor).toBeDefined();
+  await page.locator('#backdrop-kind').selectOption({ label: kalimdor! });
+  await expect(page.locator('#canvas')).toHaveAttribute('data-backdrop', /^kalimdor/);
+  await expect(page.locator('#backdrop-note')).toHaveCount(0);
+  await page.locator('#blur').fill('12');
+  await page.locator('#vignette').fill('60');
+  await page.locator('#canvas').screenshot({ path: 'test-results/backdrop-kalimdor.png' });
+  const withScreen = await saveAs('#download', 'backdrop-screen', /^mogshot-human-male\.png$/);
+  expect(opaque(withScreen)).toBe(true);
+  // The vignette darkens the corner well below the middle of the top edge.
+  const corner = pixel(withScreen, 0, 0).reduce((s, v) => s + v, 0);
+  const topMiddle = pixel(withScreen, 640, 0).reduce((s, v) => s + v, 0);
+  expect(corner).toBeLessThan(topMiddle);
+  await saveAs('#download-backdrop', 'backdrop-screen-only', /^mogshot-backdrop-kalimdor/);
+
+  // A classic 4:3 screen and the clipboard still work.
+  const deadmines = names.find((name) => name.startsWith('Deadmines'));
+  await page.locator('#backdrop-kind').selectOption({ label: deadmines! });
+  await expect(page.locator('#canvas')).toHaveAttribute('data-backdrop', 'deadmines');
+  await page.locator('#canvas').screenshot({ path: 'test-results/backdrop-deadmines.png' });
+
+  // The backdrop is remembered for the next visit.
+  await page.reload();
+  await openAndDraw(page);
+  await expect(page.locator('#backdrop-kind')).toHaveValue(/^screen:/);
+  await expect(page.locator('#canvas')).toHaveAttribute('data-backdrop', 'deadmines');
+  await expect(page.locator('#blur')).toHaveValue('12');
+
+  // Back to transparent.
+  await page.locator('#backdrop-kind').selectOption('none');
+  await expect(page.locator('#canvas')).toHaveAttribute('data-backdrop', '');
+  await expect(page.locator('#download-backdrop')).toHaveCount(0);
+  await expect(page.locator('.hint')).toContainText('transparency');
+});

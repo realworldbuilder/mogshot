@@ -216,6 +216,20 @@ button.plain:disabled {
   accent-color: var(--accent);
 }
 
+.scrub select.short {
+  width: auto;
+}
+
+.scrub input[type='color'] {
+  width: 36px;
+  height: 28px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
 ul {
   margin: 0 0 12px;
   padding-left: 20px;

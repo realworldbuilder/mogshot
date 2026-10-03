@@ -18,17 +18,19 @@ What works today, in Chrome on a Mac, against WoW build 1.60.1.70170 (`wow_class
 - Pose it: eleven curated poses (Stand, Ready, Attack, Cast, Roar, Cheer, Point, Flex, Salute, Wave, Kneel; Ready and Attack follow the weapon held), or pick any of the model's animations and scrub to a moment of it.
 - Frame it: drag to turn, shift-drag to slide, scroll to zoom, a lens slider from flat to wide, and a reset. The view always starts framed on the character.
 - Save it: a tight 4K crop, 4K, 1080p, a YouTube thumbnail or a square, as a transparent PNG with straight alpha, downloaded or copied to the clipboard. The preview has the shape of the picture that will be saved.
-- The page remembers the last character, gear, pose and size for the next visit.
+- Put a backdrop behind it: a colour, one of eight gradients or your own two colours (as a spotlight or top to bottom), or one of the game's own loading screens, picked by zone or instance name and read from your install; blur and vignette sliders. The backdrop is drawn under the character, so glows blend into it exactly, and the picture is saved uncropped at the preset's size. "Backdrop only" saves the backdrop by itself, to layer under a transparent character in Canva.
+- The page remembers the last character, gear, pose, size and backdrop for the next visit.
 - If something a character or an item needs cannot be read, the page lists it by name under the download button, before you download.
 - The page shows the product and build it found, how many of the build's files are on disk, and whether high-res textures are installed.
 - The addon: copy `addon/Mogshot` into `_classic_beta_/Interface/AddOns/`, log in to each character, and type `/reload` (the game writes the file on `/reload` or logout), then drag the folder onto the page again.
-- The 37 database tables the character and gear pipeline needs match wago.tools' export of the same build cell for cell. Sections encrypted with unpublished keys are skipped and counted (69 of 19,293 items in this build).
+- The 39 database tables the character, gear and backdrop pipeline needs match wago.tools' export of the same build cell for cell. Sections encrypted with unpublished keys are skipped and counted (69 of 19,293 items in this build).
 - The only thing fetched from the network is the table definitions, from wowdev/WoWDBDefs on GitHub, kept in the browser after the first visit.
 
 Known to be wrong or missing:
 
 - Nothing has been compared with the game side by side yet: lighting, skin tones, face shapes and how gear sits are unverified. See [docs/golden](docs/golden/README.md).
-- Glowing (additive) parts get their transparency from their brightness. That is exact over black and an approximation over anything else.
+- Glowing (additive) parts get their transparency from their brightness. That is exact over black or over a backdrop chosen on the page, and an approximation over anything else a transparent picture is laid on.
+- The classic loading screens are 512 × 512 files (three are 1024 × 1024) that the game stretches to 4:3, with a parchment frame and the game's logo painted over the top of the art. The page shows the band of art below the logo, stretched as the game does, cropped to the picture's shape; the bottom of a large logo can still show, and the art is soft at anything above 720p. The eight newer screens are 2992 × 1684 and sharp. Screens the build lists but the install lacks are left out.
 - Particle and ribbon effects on items (trails, sparks, enchant glows) are not drawn, and item animations stay at their first frame.
 - In the Stand pose a held weapon points forward; the Ready poses show it properly.
 - Guild tabards have no emblem. Items that share a name and a look are listed once.
