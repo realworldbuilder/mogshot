@@ -18,13 +18,17 @@ export interface ImportResult {
   choicesApplied?: { applied: number; of: number };
   /** Items found out of items captured. */
   itemsFound: { found: number; of: number };
+  /** What could not be imported as captured. */
   problems: string[];
+  /** Choices the page made that the player may want to know about; nothing is wrong. */
+  notes: string[];
 }
 
 const CLASS_HUNTER = 3;
 
 export function resolveImport(record: ImportedRecord, appearance: Appearance, equipment: Equipment): ImportResult {
   const problems: string[] = [];
+  const notes: string[] = [];
 
   const race =
     appearance.races.find((r) => r.id === record.raceId) ??
@@ -82,14 +86,14 @@ export function resolveImport(record: ImportedRecord, appearance: Appearance, eq
     const item = lookup(slot, id);
     if (!item) continue;
     if (slot === 'mainHand' && ranged && hunter) {
-      problems.push(`${item.name} is left out: a hunter is pictured with the bow`);
+      notes.push(`${item.name} is left out: a hunter is pictured with the bow`);
       continue;
     }
     place(slot, item);
   }
   if (ranged) {
     if (!taken.has('mainHand')) place('mainHand', ranged);
-    else problems.push(`${ranged.name} is left out: both hands are full`);
+    else notes.push(`${ranged.name} is left out: both hands are full`);
   }
 
   return {
@@ -101,5 +105,6 @@ export function resolveImport(record: ImportedRecord, appearance: Appearance, eq
     choicesApplied,
     itemsFound: { found, of: captured.length },
     problems,
+    notes,
   };
 }

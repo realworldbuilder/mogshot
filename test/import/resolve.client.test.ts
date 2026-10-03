@@ -134,10 +134,11 @@ describe.skipIf(!hasClient)('imported characters', () => {
     const bow = equipment.search('mainHand', 'bow').items.find((i) => i.inventoryType === 15)!;
     const hunter = resolveImport(record({ classId: HUNTER, gear: { mainHand: THUNDERFURY, ranged: bow.id } }), appearance, equipment);
     expect(hunter.gear.map(([slot, item]) => [slot, item.id])).toEqual([['mainHand', bow.id]]);
-    expect(hunter.problems).toEqual(['Thunderfury, Blessed Blade of the Windseeker is left out: a hunter is pictured with the bow']);
+    expect(hunter.notes).toEqual(['Thunderfury, Blessed Blade of the Windseeker is left out: a hunter is pictured with the bow']);
+    expect(hunter.problems).toEqual([]);
     const warrior = resolveImport(record({ classId: WARRIOR, gear: { mainHand: THUNDERFURY, ranged: bow.id } }), appearance, equipment);
     expect(warrior.gear.map(([slot, item]) => [slot, item.id])).toEqual([['mainHand', THUNDERFURY]]);
-    expect(warrior.problems).toEqual([`${bow.name} is left out: both hands are full`]);
+    expect(warrior.notes).toEqual([`${bow.name} is left out: both hands are full`]);
     const unarmed = resolveImport(record({ classId: WARRIOR, gear: { ranged: bow.id } }), appearance, equipment);
     expect(unarmed.gear.map(([slot, item]) => [slot, item.id])).toEqual([['mainHand', bow.id]]);
     expect(unarmed.problems).toEqual([]);

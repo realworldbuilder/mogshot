@@ -62,6 +62,9 @@ end
 -- `undressing` says the player just changed what they wear, so finding nothing worn is real.
 -- At other moments (a loading screen, logging out) the game may report nothing worn; what
 -- was captured before is kept then.
+-- `undressing` says the player just changed what they wear, so finding nothing worn is real.
+-- At other moments (a loading screen, logging out) the game may report nothing worn; what
+-- was captured before is kept then.
 -- What this version of the game exposes about a character's look, written to the saved
 -- file so it can be read from outside the game. Diagnostic only.
 local function probe()
@@ -294,11 +297,10 @@ frame:SetScript("OnEvent", function(_, event)
 			local entry = record()
 			if not entry then return end
 			local ok, count = pcall(captureLook, entry)
-			pcall(probe)
 			if ok and count and count > 0 then
 				say(("captured %d appearance choices. Leave the barber, type /reload, and give the page the folder again."):format(count))
 			else
-				say("the barber is open but the look could not be read. Type /reload afterwards so this can be looked into.")
+				say("the barber is open but the look could not be read.")
 			end
 		end)
 	else
@@ -313,14 +315,14 @@ SlashCmdList["MOGSHOT"] = function()
 		say("could not read this character: " .. tostring(entry))
 		return
 	end
-	pcall(probe)
+	MogshotDB._probe = nil -- left by an earlier version
 	local looks = 0
 	for _ in pairs(entry.choices or {}) do looks = looks + 1 end
 	say(("captured %s: %d items, %d appearance choices."):format(key() or "?", items, looks))
 	if looks == 0 then
 		-- The game tells addons what a character looks like only inside the barber window.
 		if C_BarberShop and C_BarberShop.GetAvailableCustomizations then
-			say("skin, hair and face are not captured yet. Sit in a barber chair once and they will be. Until then, set them on the page; it remembers them for this character.")
+			say("skin, hair and face are not captured yet. Sit in a barber chair once (no need to change anything) and they will be.")
 		else
 			say("this game version cannot tell addons the skin, hair and face. Set them on the page once; it remembers them for this character.")
 		end

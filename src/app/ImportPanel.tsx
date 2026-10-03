@@ -46,11 +46,12 @@ export function ImportPanel({ data, records, recordsError, selectedKey, onImport
         const found = `${result.itemsFound.found} of ${result.itemsFound.of} items found`;
         const look =
           result.choicesApplied === undefined
-            ? 'skin, hair and face not captured: set them below once and they are kept for this character'
+            ? 'skin, hair and face not captured: sit in a barber chair once with the addon, or set them below'
             : `${result.choicesApplied.applied} of ${result.choicesApplied.of} look choices apply`;
         const when = record.captured ? `captured ${capturedAgo(record.captured)}, ` : '';
         const text = `${record.name}: ${when}${found}, ${look}.`;
-        setNote({ text: result.problems.length > 0 ? `${text} ${result.problems.join('. ')}.` : text, bad: result.problems.length > 0 });
+        const more = [...result.problems, ...result.notes];
+        setNote({ text: more.length > 0 ? `${text} ${more.join('. ')}.` : text, bad: result.problems.length > 0 });
       })
       .catch((cause) => {
         if (id === request.current) setNote({ text: messageOf(cause), bad: true });

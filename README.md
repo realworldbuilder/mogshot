@@ -35,7 +35,7 @@ Known to be wrong or missing:
 - Particle and ribbon effects on items (trails, sparks, enchant glows) are not drawn, and item animations stay at their first frame.
 - In the Stand pose a held weapon points forward; the Ready poses show it properly.
 - Guild tabards have no emblem. Items that share a name and a look are listed once.
-- The addon captures appearance choices only through the barber window, and only if this build has `C_BarberShop`; until then the look of an imported character is the default or whatever was set by eye.
+- The game tells an addon a character's skin, hair and face only while the barber window is open (checked on this build: the call answers nothing anywhere else). Each character sits in a barber chair once, without changing anything; until then an imported character has the default look or whatever was set by eye.
 - Models that keep their skeleton in a separate file cannot be read. No race this build lets you create uses one; other WoW products do.
 - The folder cannot be remembered between visits: Chrome's folder picker refuses `/Applications` and `Program Files`, where the game installs, so the page uses the older pickers, which cannot keep a folder. A return visit takes one drag or pick.
 
