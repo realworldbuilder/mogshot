@@ -63,6 +63,8 @@ export interface ItemSetInfo {
   /** The highest item level among the pieces: a rough rank of how late in the game the set is. */
   level: number;
   pieces: [Slot, ItemSummary][];
+  /** Weapons to go with the set: no set of armour has its own, so these are chosen to match it. */
+  weapons: [Slot, ItemSummary][];
 }
 
 export interface ItemModel {
@@ -136,6 +138,23 @@ const TWO_HANDED_TYPES = new Set([17, 15, 26, 25]);
 const CLASS_ARMOUR = 4;
 /** The armour each class wears at level 60 (Item subclass: 1 cloth, 2 leather, 3 mail, 4 plate). */
 const ARMOUR_OF_CLASS: Record<number, number> = { 1: 4, 2: 4, 3: 3, 4: 2, 5: 1, 7: 3, 8: 1, 9: 1, 11: 2 };
+
+/**
+ * What each class holds with a set: the weapon subclasses for the main hand (Item subclass:
+ * 1 two-handed axe, 2 bow, 3 gun, 4 mace, 5 two-handed mace, 8 two-handed sword, 10 staff,
+ * 15 dagger, 18 crossbow) and what goes in the other hand.
+ */
+const WEAPONS_OF_CLASS: Record<number, { main: number[]; off?: 'shield' | 'same' }> = {
+  1: { main: [8, 1, 5] },
+  2: { main: [4], off: 'shield' },
+  3: { main: [2, 3, 18] },
+  4: { main: [15], off: 'same' },
+  5: { main: [10] },
+  7: { main: [4], off: 'shield' },
+  8: { main: [10] },
+  9: { main: [10] },
+  11: { main: [10] },
+};
 
 export class Equipment {
   private readonly bySlot = new Map<Slot, ItemSummary[]>();
@@ -409,9 +428,51 @@ export class Equipment {
         taken.add(slot);
         pieces.push([slot, item]);
       }
-      result.push({ id: row.id, name: row.name, level, pieces });
+      const quality = Math.max(...present.map((item) => item.quality));
+      result.push({ id: row.id, name: row.name, level, pieces, weapons: this.weaponsFor(classId, quality, level) });
     }
     return result.sort((a, b) => b.level - a.level || a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Weapons a class would carry with a set of a quality and item level: the nearest in
+   * quality, then in level, of the kind the class holds. A two-handed weapon leaves the
+   * off hand empty.
+   */
+  private weaponsFor(classId: number, quality: number, level: number): [Slot, ItemSummary][] {
+    const held = WEAPONS_OF_CLASS[classId];
+    if (!held) return [];
+    const bit = 1 << (classId - 1);
+    const nearest = (slot: Slot, keep: (item: ItemSummary) => boolean) => {
+      const distance = (item: ItemSummary) => Math.abs((this.itemFacts.get(item.id)?.level ?? 0) - level);
+      return (this.bySlot.get(slot) ?? [])
+        .filter((item) => {
+          const allowable = this.itemFacts.get(item.id)?.allowableClass ?? 0;
+          // 0 and -1 both mean any class.
+          return (allowable <= 0 || (allowable & bit) !== 0) && keep(item);
+        })
+        .sort(
+          (a, b) =>
+            Math.abs(a.quality - quality) - Math.abs(b.quality - quality) ||
+            distance(a) - distance(b) ||
+            a.name.localeCompare(b.name) ||
+            a.id - b.id,
+        )[0];
+    };
+    const ofKind = (item: ItemSummary) => {
+      const kind = this.itemClass.get(item.id);
+      return kind?.classId === CLASS_WEAPON && held.main.includes(kind.subclassId);
+    };
+    const weapons: [Slot, ItemSummary][] = [];
+    const main = nearest('mainHand', ofKind);
+    if (main) weapons.push(['mainHand', main]);
+    if (held.off && !(main && TWO_HANDED_TYPES.has(main.inventoryType))) {
+      const off = nearest('offHand', (item) =>
+        held.off === 'shield' ? item.inventoryType === INVENTORY_SHIELD : ofKind(item) && item.id !== main?.id,
+      );
+      if (off) weapons.push(['offHand', off]);
+    }
+    return weapons;
   }
 
   /**

@@ -145,7 +145,7 @@ export function GearPanel({ data, raceId, classId, onClass, gear, onChange, onOu
           disabled={sets.length === 0}
           onChange={(event) => {
             const set = sets.find((s) => s.id === Number(event.currentTarget.value));
-            if (set) onOutfit(set.pieces);
+            if (set) onOutfit([...set.pieces, ...set.weapons]);
           }}
         >
           <option value="">{sets.length === 0 ? 'No sets' : 'Equip a set…'}</option>
@@ -155,7 +155,7 @@ export function GearPanel({ data, raceId, classId, onClass, gear, onChange, onOu
             </option>
           ))}
         </select>
-        <button class="plain" id="best-set" disabled={sets.length === 0} onClick={() => sets[0] && onOutfit(sets[0].pieces)}>
+        <button class="plain" id="best-set" disabled={sets.length === 0} onClick={() => sets[0] && onOutfit([...sets[0].pieces, ...sets[0].weapons])}>
           Best set
         </button>
       </div>

@@ -490,6 +490,9 @@ test('random look, random epics, and the best set for a class', async ({ page })
   await expect(page.locator('[data-slot="chest"] .item-name')).toHaveText(/Battlegear|Armor|Breastplate|Dreadnaught/);
   const chest = await page.locator('[data-slot="chest"] .item-name').innerText();
   console.log('best warrior set chest piece:', chest);
+  // A set comes with a weapon, and replaces the off hand the random outfit may have filled.
+  await expect(page.locator('[data-slot="mainHand"] .item-name')).not.toHaveText('Empty');
+  await expect(page.locator('[data-slot="offHand"] .item-name')).toHaveText('Empty');
   expect(await problemsShown(page)).toEqual([]);
   await canvas.screenshot({ path: 'test-results/best-set.png' });
 
@@ -497,6 +500,9 @@ test('random look, random epics, and the best set for a class', async ({ page })
   const frostfire = await page.locator('#set option', { hasText: 'Frostfire Regalia' }).getAttribute('value');
   await redraw(page, () => page.locator('#set').selectOption(frostfire!));
   await expect(page.locator('[data-slot="chest"] .item-name')).toHaveText('Frostfire Robe');
+  await expect(page.locator('[data-slot="mainHand"] .item-name')).not.toHaveText('Empty');
+  expect(await problemsShown(page)).toEqual([]);
+  await canvas.screenshot({ path: 'test-results/frostfire-set.png' });
 
   await redraw(page, () => page.locator('#clear-gear').click());
   await expect(page.locator('[data-slot="chest"] .item-name')).toHaveText('Empty');

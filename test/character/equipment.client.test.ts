@@ -183,6 +183,35 @@ describe.skipIf(!hasClient)('gear', () => {
     expect(equipment.sets(mage.id).some((s) => s.name === 'Frostfire Regalia')).toBe(true);
   });
 
+  it('gives each set weapons the class would hold', () => {
+    const classes = equipment.classes(1);
+    const setsOf = (name: string) => equipment.sets(classes.find((c) => c.name === name)!.id);
+    const log = (label: string, weapons: [string, { name: string }][]) =>
+      console.log(label, weapons.map(([slot, item]) => `${slot}: ${item.name}`));
+
+    // A warrior: one two-handed weapon of the set's quality, nothing in the off hand.
+    const dreadnaught = setsOf('Warrior').find((s) => s.name === "Dreadnaught's Battlegear")!;
+    log('Dreadnaught:', dreadnaught.weapons);
+    expect(dreadnaught.weapons.map(([slot]) => slot)).toEqual(['mainHand']);
+    expect(dreadnaught.weapons[0]![1].inventoryType).toBe(17);
+    expect(dreadnaught.weapons[0]![1].quality).toBe(4);
+
+    // A paladin: a one-handed weapon and a shield.
+    const paladin = setsOf('Paladin')[0]!;
+    log(`${paladin.name}:`, paladin.weapons);
+    expect(paladin.weapons.map(([slot]) => slot)).toEqual(['mainHand', 'offHand']);
+    expect(paladin.weapons[1]![1].inventoryType).toBe(14);
+
+    // A mage: a staff.
+    const frostfire = setsOf('Mage').find((s) => s.name === 'Frostfire Regalia')!;
+    log('Frostfire:', frostfire.weapons);
+    expect(frostfire.weapons.map(([slot]) => slot)).toEqual(['mainHand']);
+    expect(frostfire.weapons[0]![1].inventoryType).toBe(17);
+
+    // Every set of every class comes armed.
+    for (const c of classes) for (const set of equipment.sets(c.id)) expect(set.weapons.length, `${c.name} ${set.name}`).toBeGreaterThan(0);
+  });
+
   it('dresses a random outfit of epics with no empty armour slot', () => {
     let seed = 7;
     const random = () => ((seed = (seed * 48271) % 2147483647) / 2147483647);
