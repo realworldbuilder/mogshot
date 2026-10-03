@@ -208,7 +208,7 @@ async function render(file: string | undefined, session: Session, host: Host): P
           sex: sexName(shot.sex),
           pose: scene.pose.preset ?? scene.animations.find((a) => a.sequence === scene.pose.sequence)?.name,
           gear: Object.fromEntries([...shot.gear].map(([slot, item]) => [slot, `${item.name} (${item.id})`])),
-          ...(place && { place: { ground: place.ground.map((n) => Number(n.toFixed(2))), parts: place.meshes.length, props: place.instances.length, propKinds: place.props.length } }),
+          ...(place && { place: { ground: place.ground.map((n) => Number(n.toFixed(2))), ground_tiles: place.terrain.length, parts: place.meshes.length, props: place.instances.length, propKinds: place.props.length } }),
           problems: [...shot.problems, ...scene.problems, ...(place?.problems ?? []), ...drawn.problems],
           notes: shot.notes,
           graphics: drawn.graphics,

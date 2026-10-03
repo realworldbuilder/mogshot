@@ -3,11 +3,11 @@ import { VERTEX_SIZE } from '../formats/m2';
 import type { Image } from '../formats/blp';
 import { invert, lookAt, type Mat4, multiply, perspective, transformPoint } from '../math/mat4';
 import { alphaBounds } from './export';
-import { PLACE_VERTEX_SIZE, type PlaceDraw, type PlaceScene } from '../world/place';
+import { PLACE_VERTEX_SIZE, type PlaceDraw, type PlaceScene, type TerrainMesh } from '../world/place';
 import { combiners } from './shader-table';
 import {
   BACKDROP_FRAGMENT_SOURCE, BACKDROP_VERTEX_SOURCE, DOWNSAMPLE_FRAGMENT_SOURCE, DOWNSAMPLE_VERTEX_SOURCE, FRAGMENT_SOURCE,
-  PLACE_FRAGMENT_SOURCE, PLACE_VERTEX_SOURCE, VERTEX_SOURCE,
+  PLACE_FRAGMENT_SOURCE, PLACE_VERTEX_SOURCE, TERRAIN_FRAGMENT_SOURCE, VERTEX_SOURCE,
 } from './shaders';
 
 /** Where the camera is, as an orbit around the character. Angles in radians. */
@@ -76,6 +76,7 @@ interface PreparedDraw {
 
 /** A place's buffers on the graphics card. */
 interface GpuPlace {
+  terrain: { vao: WebGLVertexArrayObject; vertexBuffer: WebGLBuffer; indexBuffer: WebGLBuffer; blend: WebGLTexture; transform: Float32Array; draws: TerrainMesh['draws'] }[];
   meshes: {
     vao: WebGLVertexArrayObject;
     vertexBuffer: WebGLBuffer;
@@ -125,6 +126,7 @@ export class CharacterRenderer {
   private readonly backdropProgram: WebGLProgram;
   private backdrop: WebGLTexture | undefined;
   private readonly placeProgram: WebGLProgram;
+  private readonly terrainProgram: WebGLProgram;
   private place: GpuPlace | undefined;
   private readonly uniforms = {} as Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>;
   private readonly white: WebGLTexture;
@@ -147,6 +149,7 @@ export class CharacterRenderer {
     this.downsample = link(gl, DOWNSAMPLE_VERTEX_SOURCE, DOWNSAMPLE_FRAGMENT_SOURCE);
     this.backdropProgram = link(gl, BACKDROP_VERTEX_SOURCE, BACKDROP_FRAGMENT_SOURCE);
     this.placeProgram = link(gl, PLACE_VERTEX_SOURCE, PLACE_FRAGMENT_SOURCE);
+    this.terrainProgram = link(gl, PLACE_VERTEX_SOURCE, TERRAIN_FRAGMENT_SOURCE);
     for (const name of UNIFORMS) this.uniforms[name] = gl.getUniformLocation(this.program, name);
 
     this.white = gl.createTexture()!;
@@ -271,11 +274,12 @@ export class CharacterRenderer {
   setPlace(place: PlaceScene | undefined): void {
     const { gl } = this;
     if (this.place) {
-      for (const mesh of this.place.meshes) {
+      for (const mesh of [...this.place.meshes, ...this.place.terrain]) {
         gl.deleteVertexArray(mesh.vao);
         gl.deleteBuffer(mesh.vertexBuffer);
         gl.deleteBuffer(mesh.indexBuffer);
       }
+      for (const mesh of this.place.terrain) gl.deleteTexture(mesh.blend);
       for (const { mesh } of this.place.props) {
         gl.deleteVertexArray(mesh.vao);
         gl.deleteBuffer(mesh.vertexBuffer);
@@ -287,7 +291,7 @@ export class CharacterRenderer {
     this.place = undefined;
     this.placeProblems = [];
     if (!place) return;
-    const meshes = place.meshes.map((mesh) => {
+    const buffers = (mesh: { vertices: Uint8Array; indices: Uint16Array }) => {
       const vao = gl.createVertexArray()!;
       const vertexBuffer = gl.createBuffer()!;
       const indexBuffer = gl.createBuffer()!;
@@ -305,8 +309,15 @@ export class CharacterRenderer {
       gl.enableVertexAttribArray(3);
       gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, PLACE_VERTEX_SIZE, 32);
       gl.bindVertexArray(null);
-      return { vao, vertexBuffer, indexBuffer, outdoors: mesh.outdoors, baked: mesh.baked, transform: mesh.transform, draws: mesh.draws };
-    });
+      return { vao, vertexBuffer, indexBuffer };
+    };
+    const meshes = place.meshes.map((mesh) => ({ ...buffers(mesh), outdoors: mesh.outdoors, baked: mesh.baked, transform: mesh.transform, draws: mesh.draws }));
+    const terrain = place.terrain.map((mesh) => ({
+      ...buffers(mesh),
+      blend: this.upload({ ...mesh.blend, wrapX: false, wrapY: false }),
+      transform: mesh.transform,
+      draws: mesh.draws,
+    }));
     // A prop with a shader this app does not know is drawn without that batch; one line says how many.
     const unknown: string[] = [];
     const props = place.props.map((prop) => {
@@ -315,6 +326,7 @@ export class CharacterRenderer {
     });
     this.placeProblems = unknown.length > 0 ? [`${unknown.length} parts of props in the place use shaders this app does not know and are not drawn`] : [];
     this.place = {
+      terrain,
       meshes,
       textures: place.textures.map((image) => this.upload(image)),
       props,
@@ -585,9 +597,50 @@ export class CharacterRenderer {
     gl.drawElements(gl.TRIANGLES, draw.indexCount, gl.UNSIGNED_SHORT, draw.indexStart * 2);
   }
 
+  /** Draw the ground of a place. */
+  private drawTerrain(place: GpuPlace, view: Mat4, projection: Mat4): void {
+    const { gl, terrainProgram } = this;
+    const at = (name: string) => gl.getUniformLocation(terrainProgram, name);
+    gl.useProgram(terrainProgram);
+    gl.uniformMatrix4fv(at('u_view'), false, view);
+    gl.uniformMatrix4fv(at('u_projection'), false, projection);
+    gl.uniform3f(at('u_sun_direction'), SUN[0], SUN[1], SUN[2]);
+    gl.uniform3f(at('u_sun_color'), 0.75, 0.7, 0.62);
+    gl.uniform3f(at('u_ambient'), 0.42, 0.45, 0.52);
+    gl.uniform3f(at('u_haze'), HAZE[0], HAZE[1], HAZE[2]);
+    gl.uniform1f(at('u_reach'), place.reach);
+    for (let layer = 0; layer < 4; layer++) gl.uniform1i(at(`u_layer${layer}`), layer);
+    gl.uniform1i(at('u_blend'), 4);
+    const model = at('u_model');
+    const layers = at('u_layers');
+    const chunk = at('u_chunk');
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.CULL_FACE);
+    for (const mesh of place.terrain) {
+      gl.bindVertexArray(mesh.vao);
+      gl.uniformMatrix4fv(model, false, mesh.transform);
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, mesh.blend);
+      for (const draw of mesh.draws) {
+        gl.uniform1i(layers, draw.layers.length);
+        gl.uniform2f(chunk, draw.column, draw.row);
+        for (let layer = 0; layer < 4; layer++) {
+          gl.activeTexture(gl.TEXTURE0 + layer);
+          gl.bindTexture(gl.TEXTURE_2D, place.textures[draw.layers[layer] ?? -1] ?? this.white);
+        }
+        gl.drawElements(gl.TRIANGLES, draw.indexCount, gl.UNSIGNED_SHORT, draw.indexStart * 2);
+      }
+    }
+    gl.bindVertexArray(null);
+  }
+
   /** Draw the world: solid surfaces first, then the blended ones over them. */
   private drawPlace(place: GpuPlace, view: Mat4, projection: Mat4): void {
     const { gl, placeProgram } = this;
+    this.drawTerrain(place, view, projection);
     const at = (name: string) => gl.getUniformLocation(placeProgram, name);
     gl.useProgram(placeProgram);
     gl.uniformMatrix4fv(at('u_view'), false, view);
@@ -601,6 +654,7 @@ export class CharacterRenderer {
     const model = at('u_model');
     const outdoors = at('u_outdoors');
     const baked = at('u_baked');
+    const water = at('u_water');
     const blendMode = at('u_blend_mode');
     const unlit = at('u_unlit');
 
@@ -624,6 +678,7 @@ export class CharacterRenderer {
           else gl.enable(gl.CULL_FACE);
           gl.uniform1i(blendMode, draw.blendMode);
           gl.uniform1i(unlit, draw.unlit ? 1 : 0);
+          gl.uniform1i(water, draw.water ? 1 : 0);
           gl.bindTexture(gl.TEXTURE_2D, place.textures[draw.texture] ?? this.white);
           gl.drawElements(gl.TRIANGLES, draw.indexCount, gl.UNSIGNED_SHORT, draw.indexStart * 2);
         }

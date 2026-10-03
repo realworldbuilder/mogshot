@@ -323,6 +323,7 @@ uniform sampler2D u_texture;
 uniform int u_blend_mode;
 uniform bool u_outdoors;
 uniform bool u_baked;
+uniform bool u_water;
 uniform bool u_unlit;
 // The sun's direction in the character's space, and the colours of sun, sky and haze.
 uniform vec3 u_sun_direction;
@@ -337,15 +338,61 @@ void main() {
   vec4 texel = texture(u_texture, v_texcoord);
   if (u_blend_mode == 1 && texel.a < 0.5) discard;
   vec3 normal = normalize(gl_FrontFacing ? v_normal : -v_normal);
-  // A room with no baked light is lit evenly.
-  vec3 light = u_baked ? v_baked.rgb * 2.0 : vec3(0.75);
+  // Indoors: an even light, plus whatever light is baked into the walls.
+  vec3 light = vec3(0.6) + (u_baked ? v_baked.rgb * 1.5 : vec3(0.0));
   if (u_outdoors) light = u_ambient + u_sun_color * max(dot(normal, u_sun_direction), 0.0) + v_baked.rgb;
   if (u_unlit) light = vec3(1.0);
   vec3 color = texel.rgb * light;
+  if (u_water) {
+    // Still water: its own colour under the sky's light, clearer looked straight down on.
+    color = vec3(0.13, 0.27, 0.33) * (u_ambient + u_sun_color);
+    texel.a = 0.82;
+  }
   // Haze: none near the character, complete at the edge of what is drawn.
   float haze = smoothstep(u_reach * 0.25, u_reach, v_distance);
   color = mix(color, u_haze, haze);
   float alpha = u_blend_mode > 1 ? texel.a : 1.0;
   out_color = vec4(color * alpha, alpha);
+}
+`;
+
+/** The ground: up to four textures spread by a blend picture, tinted and lit like the outdoors. Uses the place's vertex shader. */
+export const TERRAIN_FRAGMENT_SOURCE = `#version 300 es
+precision highp float;
+
+in vec2 v_texcoord;
+in vec3 v_normal;
+in vec4 v_baked;
+in float v_distance;
+
+uniform sampler2D u_layer0;
+uniform sampler2D u_layer1;
+uniform sampler2D u_layer2;
+uniform sampler2D u_layer3;
+uniform sampler2D u_blend;
+uniform int u_layers;
+// The chunk's column and row in its tile, 0 to 15.
+uniform vec2 u_chunk;
+uniform vec3 u_sun_direction;
+uniform vec3 u_sun_color;
+uniform vec3 u_ambient;
+uniform vec3 u_haze;
+uniform float u_reach;
+
+out vec4 out_color;
+
+void main() {
+  // Stay half a texel inside the chunk's own part of the blend picture.
+  vec2 cell = clamp(v_texcoord, 0.5 / 64.0, 1.0 - 0.5 / 64.0);
+  vec3 cover = texture(u_blend, (u_chunk + cell) / 16.0).rgb;
+  vec2 uv = v_texcoord * 8.0;
+  vec3 color = u_layers > 0 ? texture(u_layer0, uv).rgb : vec3(0.35, 0.4, 0.3);
+  if (u_layers > 1) color = mix(color, texture(u_layer1, uv).rgb, cover.r);
+  if (u_layers > 2) color = mix(color, texture(u_layer2, uv).rgb, cover.g);
+  if (u_layers > 3) color = mix(color, texture(u_layer3, uv).rgb, cover.b);
+  vec3 light = u_ambient + u_sun_color * max(dot(normalize(v_normal), u_sun_direction), 0.0);
+  color *= light * v_baked.rgb * 2.0;
+  color = mix(color, u_haze, smoothstep(u_reach * 0.25, u_reach, v_distance));
+  out_color = vec4(color, 1.0);
 }
 `;
