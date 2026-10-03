@@ -292,7 +292,14 @@ frame:SetScript("OnEvent", function(_, event)
 	elseif event == "BARBER_SHOP_OPEN" or event == "BARBER_SHOP_APPEARANCE_APPLIED" then
 		C_Timer.After(0.5, function()
 			local entry = record()
-			if entry then pcall(captureLook, entry) end
+			if not entry then return end
+			local ok, count = pcall(captureLook, entry)
+			pcall(probe)
+			if ok and count and count > 0 then
+				say(("captured %d appearance choices. Leave the barber, type /reload, and give the page the folder again."):format(count))
+			else
+				say("the barber is open but the look could not be read. Type /reload afterwards so this can be looked into.")
+			end
 		end)
 	else
 		pcall(capture)
