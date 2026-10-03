@@ -3,12 +3,16 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "bin": {
+    "mogshot": "bin/mogshot.mjs"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "mogshot": "node bin/mogshot.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
