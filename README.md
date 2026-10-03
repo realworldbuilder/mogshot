@@ -41,6 +41,26 @@ Known to be wrong or missing:
 
 Not yet tested: Edge, Windows, other browsers, and any other WoW product. Encrypted data with published keys is not decrypted yet (this build has none).
 
+## Command line
+
+The same pictures without the page, for scripts and assistants: write down what you want, get PNG files.
+
+```
+pnpm mogshot render shots.json
+```
+
+```json
+[
+  { "out": "rambleon.png", "character": "Rambleon", "pose": "Ready" },
+  { "out": "warrior.png", "race": "Orc", "sex": "male", "set": { "class": "Warrior" }, "pose": "Roar",
+    "camera": { "yaw": 20 }, "size": "square", "backdrop": "Ember" }
+]
+```
+
+A spec names a race and sex or a character the addon saved, and optionally appearance choices, a class set, items by name or id, a pose or a moment of an animation, the camera, a size and a backdrop. `pnpm mogshot help` lists every field; `races`, `options`, `poses`, `items`, `sets`, `backdrops`, `sizes` and `characters` list what can be named. Everything is printed as JSON, with each picture's problems. A name that cannot be placed is an error that lists what there is, not a guess.
+
+Node reads the game folder (`--wow <folder>` or `WOW_DIR`, default `/Applications/World of Warcraft`) and builds the character; installed Chrome, run without a window, draws it with the page's own renderer. Tried on one Mac only. A first run reads the install's index; after that a picture takes one to three seconds.
+
 ## Development
 
 ```bash
