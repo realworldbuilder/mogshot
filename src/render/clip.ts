@@ -8,7 +8,7 @@ import { encodePng, unpremultiply } from './export';
  * same every time and never drops a frame.
  */
 
-/** `mp4` and `gif` are opaque (transparency becomes black); `frames` is a zip of transparent PNGs. */
+/** `mp4` (H.264 with a silent sound track) and `gif` are opaque (transparency becomes black); `frames` is a zip of transparent PNGs. */
 export type ClipFormat = 'mp4' | 'gif' | 'frames';
 
 export const CLIP_FORMATS: Record<ClipFormat, { name: string; extension: string; type: string }> = {
@@ -36,6 +36,52 @@ export function clipTimes(durationMs: number, fps: number, seconds?: number): nu
   }
   const count = Math.max(1, Math.round(seconds * fps));
   return Array.from({ length: count }, (_, i) => ((i * 1000) / fps) % durationMs);
+}
+
+/**
+ * The moments for a clip of about `seconds` that still loops without a seam: the animation
+ * played a whole number of times, the number that comes nearest to the length asked for.
+ */
+export function loopedTimes(durationMs: number, fps: number, seconds: number): number[] {
+  const once = clipTimes(durationMs, fps);
+  if (!(durationMs > 0)) return once;
+  const loops = Math.max(1, Math.round((seconds * 1000) / durationMs));
+  return Array.from({ length: loops }, () => once).flat();
+}
+
+/**
+ * RGBA as the planes a video holds: brightness at full size, then the two colour planes at
+ * half size each way, in the standard (BT.709, limited range) form players and sites expect.
+ * Alpha is ignored: premultiplied colour over nothing is the colour over black.
+ */
+export function toI420(pixels: Uint8Array, width: number, height: number): Uint8Array {
+  const out = new Uint8Array(width * height + 2 * (width / 2) * (height / 2));
+  const halfWidth = width / 2;
+  const uAt = width * height;
+  const vAt = uAt + halfWidth * (height / 2);
+  for (let y = 0; y < height; y += 2) {
+    for (let x = 0; x < width; x += 2) {
+      let red = 0;
+      let blue = 0;
+      let luma = 0;
+      for (let dy = 0; dy < 2; dy++) {
+        for (let dx = 0; dx < 2; dx++) {
+          const p = ((y + dy) * width + x + dx) * 4;
+          const r = pixels[p]!;
+          const b = pixels[p + 2]!;
+          const l = 0.2126 * r + 0.7152 * pixels[p + 1]! + 0.0722 * b;
+          out[(y + dy) * width + x + dx] = 16 + (219 / 255) * l + 0.5;
+          red += r;
+          blue += b;
+          luma += l;
+        }
+      }
+      const at = (y / 2) * halfWidth + x / 2;
+      out[uAt + at] = 128 + ((224 / 255) * (blue - luma)) / (4 * 1.8556) + 0.5;
+      out[vAt + at] = 128 + ((224 / 255) * (red - luma)) / (4 * 1.5748) + 0.5;
+    }
+  }
+  return out;
 }
 
 /** Video sizes must be even in both directions. */
@@ -92,7 +138,7 @@ export async function encodeClip(options: ClipOptions): Promise<Uint8Array> {
 
 type Each = (use: (image: Image, index: number) => Promise<void> | void) => Promise<void>;
 
-async function encodeMp4({ width, height, fps }: ClipOptions, each: Each): Promise<Uint8Array> {
+async function encodeMp4({ width, height, fps, frames }: ClipOptions, each: Each): Promise<Uint8Array> {
   if (typeof VideoEncoder === 'undefined') throw new Error('This browser cannot encode video');
   if (width % 2 || height % 2) throw new Error('A video needs an even width and height');
   const config: VideoEncoderConfig = {
@@ -112,7 +158,15 @@ async function encodeMp4({ width, height, fps }: ClipOptions, each: Each): Promi
   // The encoders' helpers are fetched when a clip is first made, not with the page.
   const { ArrayBufferTarget, Muxer } = await import('mp4-muxer');
   const target = new ArrayBufferTarget();
-  const muxer = new Muxer({ target, video: { codec: 'avc', width, height, frameRate: fps }, fastStart: 'in-memory' });
+  // A silent sound track, where the browser can make one: some sites and players balk at a video with none.
+  const audioConfig: AudioEncoderConfig = { codec: 'mp4a.40.2', sampleRate: 48_000, numberOfChannels: 2, bitrate: 128_000 };
+  const sound = typeof AudioEncoder !== 'undefined' && (await AudioEncoder.isConfigSupported(audioConfig)).supported === true;
+  const muxer = new Muxer({
+    target,
+    video: { codec: 'avc', width, height, frameRate: fps },
+    ...(sound && { audio: { codec: 'aac' as const, sampleRate: audioConfig.sampleRate, numberOfChannels: audioConfig.numberOfChannels } }),
+    fastStart: 'in-memory',
+  });
   let failure: Error | undefined;
   const encoder = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
@@ -123,13 +177,13 @@ async function encodeMp4({ width, height, fps }: ClipOptions, each: Each): Promi
   try {
     await each(async (image, i) => {
       if (failure) throw failure;
-      // Premultiplied colour over nothing is the colour over black, which is what a video shows.
-      const frame = new VideoFrame(image.pixels, {
-        format: 'RGBX',
+      const frame = new VideoFrame(toI420(image.pixels, width, height), {
+        format: 'I420',
         codedWidth: width,
         codedHeight: height,
         timestamp: Math.round(i * frameMicros),
         duration: Math.round(frameMicros),
+        colorSpace: { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false },
       });
       encoder.encode(frame, { keyFrame: i % Math.max(1, Math.round(fps * 2)) === 0 });
       frame.close();
@@ -140,6 +194,31 @@ async function encodeMp4({ width, height, fps }: ClipOptions, each: Each): Promi
     if (failure) throw failure;
   } finally {
     if (encoder.state !== 'closed') encoder.close();
+  }
+  if (sound) {
+    const audio = new AudioEncoder({ output: (chunk, meta) => muxer.addAudioChunk(chunk, meta), error: (cause) => (failure = cause) });
+    audio.configure(audioConfig);
+    const total = Math.ceil((frames / fps) * audioConfig.sampleRate);
+    const block = 1024;
+    try {
+      for (let at = 0; at < total; at += block) {
+        const count = Math.min(block, total - at);
+        const silence = new AudioData({
+          format: 'f32',
+          sampleRate: audioConfig.sampleRate,
+          numberOfChannels: audioConfig.numberOfChannels,
+          numberOfFrames: count,
+          timestamp: Math.round((at / audioConfig.sampleRate) * 1_000_000),
+          data: new Float32Array(count * audioConfig.numberOfChannels),
+        });
+        audio.encode(silence);
+        silence.close();
+      }
+      await audio.flush();
+      if (failure) throw failure;
+    } finally {
+      if (audio.state !== 'closed') audio.close();
+    }
   }
   muxer.finalize();
   return new Uint8Array(target.buffer);
