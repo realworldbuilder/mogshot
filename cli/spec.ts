@@ -71,6 +71,7 @@ export const SIZES: Record<string, PictureSize> = {
   square: { width: 2160, height: 2160, tight: false },
   portrait: { width: 2880, height: 3840, tight: false },
   story: { width: 2160, height: 3840, tight: false },
+  reel: { width: 2160, height: 3840, tight: false },
 };
 
 /** A spec with every name placed. */

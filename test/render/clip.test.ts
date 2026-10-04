@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { clipFormatOf } from '../../cli/spec';
-import { clipSize, clipTimes, evenSize } from '../../src/render/clip';
+import { clipSize, clipTimes, evenSize, loopedTimes, toI420 } from '../../src/render/clip';
 
 describe('a clip', () => {
   it('is one pass of the animation, ending a frame before it begins again', () => {
@@ -22,6 +22,30 @@ describe('a clip', () => {
     expect(times[10]).toBeCloseTo(0);
     expect(times[24]).toBeCloseTo(400);
     for (const time of times) expect(time).toBeLessThan(1000);
+  });
+
+  it('runs for about a length by playing the animation a whole number of times', () => {
+    // 3.3 s of animation, asked for 10 s: three passes, each the same frames, so the end meets the start.
+    const times = loopedTimes(3333, 30, 10);
+    expect(times.length).toBe(300);
+    expect(times.slice(100, 200)).toEqual(times.slice(0, 100));
+    // Never less than one pass.
+    expect(loopedTimes(3333, 30, 1).length).toBe(100);
+    expect(loopedTimes(0, 30, 10)).toEqual([0]);
+  });
+
+  it('turns pixels into standard video levels: black 16, white 235, grey without colour', () => {
+    const pixels = new Uint8Array(4 * 2 * 4);
+    // Top row white, bottom row black; then a column of pure red.
+    pixels.set([255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 255, 255, 0, 0, 255], 0);
+    pixels.set([0, 0, 0, 255, 0, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255], 16);
+    const planes = toI420(pixels, 4, 2);
+    expect(planes.length).toBe(8 + 2 + 2);
+    expect([planes[0], planes[1], planes[4], planes[5]]).toEqual([235, 235, 16, 16]);
+    // Half white, half black averages to no colour; red sits at the top of the red-difference plane.
+    expect([planes[8], planes[10]]).toEqual([128, 128]);
+    expect(planes[2]).toBe(63);
+    expect(planes[11]).toBe(240);
   });
 
   it('has one frame for an animation with no length', () => {

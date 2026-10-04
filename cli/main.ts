@@ -39,7 +39,8 @@ Everything is printed as JSON. A spec, with every field but a race or a characte
     "pose": "Ready",                              or { "animation": "EmoteDance", "at": 0.5 }
     "clip": true,                                 a looping clip of the pose's animation instead of a picture; "out" ends
                                                   .mp4, .gif or .zip (transparent PNG frames). Or { "animation": "EmoteDance",
-                                                  "seconds": 4, "fps": 30 }; without seconds, one pass, which loops cleanly
+                                                  "seconds": 10, "fps": 30 }; without seconds, one pass, which loops cleanly.
+                                                  "size": "reel" makes it 1080 × 1920
     "place": { "x": -8833, "y": 628, "facing": 215 },   stand in the game world, at the position /mogshot spot prints in the game;
                                                   also "map" (name or number, default Eastern Kingdoms), "z" to pick a floor,
                                                   "reach" in yards (default 300). Fills the frame; default size "1080p"

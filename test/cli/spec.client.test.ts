@@ -120,6 +120,8 @@ describe.skipIf(!hasClient)('a spec', () => {
     expect(video.subarray(4, 8).toString('latin1')).toBe('ftyp');
     expect(video.indexOf('moov')).toBeLessThan(video.indexOf('mdat'));
     expect(video.includes('avc1')).toBe(true);
+    // With a sound track (silent), as sites that take video expect.
+    expect(video.includes('mp4a')).toBe(true);
 
     expect(dance!.clip).toMatchObject({ animation: 'EmoteDance', fps: 25 });
     const gif = await readFile(join(dir, 'dance.gif'));

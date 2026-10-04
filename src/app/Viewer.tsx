@@ -6,7 +6,7 @@ import type { AnimationInfo, PoseInfo, PoseRequest } from '../character/scene';
 import type { ImportedRecord } from '../import/record';
 import type { ImportResult } from '../import/resolve';
 import { type Backdrop, backdropImage, slug } from '../render/backdrop';
-import { CLIP_FPS, CLIP_FORMATS, type ClipFormat, clipSize, clipTimes, encodeClip, GIF_FPS } from '../render/clip';
+import { CLIP_FPS, CLIP_FORMATS, type ClipFormat, clipSize, clipTimes, encodeClip, GIF_FPS, loopedTimes } from '../render/clip';
 import { encodePng, unpremultiply } from '../render/export';
 import { type Camera, CharacterRenderer, DEFAULT_CAMERA } from '../render/renderer';
 import type { LoadingScreen, Race } from '../worker/api';
@@ -139,6 +139,8 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
   const [placed, setPlaced] = useState<{ state: 'none' | 'reading' | 'shown'; problem?: string }>({ state: 'none' });
   const placeRequest = useRef(0);
   const [clipFormat, setClipFormat] = useState<ClipFormat>('mp4');
+  // Seconds the clip should run for, by playing the animation over; 0 for a single pass.
+  const [clipLength, setClipLength] = useState(0);
   // The backdrop as drawn behind the preview, kept to give a renderer created later.
   const backdropSource = useRef<ReturnType<typeof compose>>(undefined);
 
@@ -480,7 +482,7 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
     const { sequence, time } = pose;
     const fps = clipFormat === 'gif' ? GIF_FPS : CLIP_FPS;
     const { width, height } = clipSize(size.tight ? preview : size, clipFormat === 'gif');
-    const times = clipTimes(pose.duration, fps);
+    const times = clipLength > 0 ? loopedTimes(pose.duration, fps, clipLength) : clipTimes(pose.duration, fps);
     try {
       if (hasBackdrop) view.setBackdrop(composeAt(width, height));
       view.holdFraming((await data.pose(sequence, 0)).bounds);
@@ -501,7 +503,7 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
       setExportNote({
         bad: false,
         text:
-          `Saved ${times.length} frames, ${(pose.duration / 1000).toFixed(1)} s at ${fps} a second, ${width} × ${height} ` +
+          `Saved ${times.length} frames, ${(times.length / fps).toFixed(1)} s at ${fps} a second, ${width} × ${height} ` +
           `(${(bytes.length / 1024 / 1024).toFixed(1)} MB) in ${((performance.now() - start) / 1000).toFixed(1)} s.` +
           (clipFormat !== 'frames' && !hasBackdrop && !inPlace ? ' With no backdrop the background is black; PNG frames keep it transparent.' : ''),
       });
@@ -697,11 +699,24 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
                   <option value={format}>{CLIP_FORMATS[format].name}</option>
                 ))}
               </select>
+              <select
+                id="clip-length"
+                aria-label="Clip length"
+                value={clipLength}
+                onChange={(event) => setClipLength(Number(event.currentTarget.value))}
+              >
+                <option value={0}>One loop</option>
+                {[5, 10, 15, 30].map((seconds) => (
+                  <option value={seconds}>About {seconds} s</option>
+                ))}
+              </select>
               <button class="plain" id="download-clip" disabled={exporting || !shown || !animation} onClick={saveClip}>
                 Download clip
               </button>
               <span class="dim small">
-                {animation ? `${animation.name}, ${((pose?.duration ?? 0) / 1000).toFixed(1)} s, looping` : ''}
+                {animation
+                  ? `${animation.name}, ${((clipLength > 0 ? loopedTimes(animation.duration, 1000, clipLength).length : animation.duration) / 1000).toFixed(1)} s, looping`
+                  : ''}
               </span>
             </div>
             <p class={`${exportNote?.bad ? 'bad' : 'dim'} small`} id="export-note">

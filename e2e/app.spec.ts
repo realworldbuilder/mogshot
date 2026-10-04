@@ -383,6 +383,14 @@ test('plays an animation and saves it as a clip', async ({ page }) => {
   const zip = await save('frames', 'mogshot-human-male-emotedance.zip');
   expect(zip.subarray(0, 2).toString('latin1')).toBe('PK');
 
+  // A Reel: upright, and long enough by playing the dance over.
+  await page.locator('#size').selectOption('reel');
+  await page.locator('#clip-length').selectOption('5');
+  const reel = await save('mp4', 'mogshot-human-male-emotedance.mp4');
+  expect(reel.includes('mp4a')).toBe(true);
+  expect(await page.locator('#export-note').innerText()).toMatch(/4\.\d s at 30 a second, 1080 × 1920/);
+  await page.locator('#size').selectOption('youtube');
+
   // The page is back on the moment it was paused at, and nothing is wrong.
   await page.locator('.viewer > div').first().screenshot({ path: 'test-results/clip-controls.png' });
   expect(await canvas.getAttribute('data-pose')).toBe(held);

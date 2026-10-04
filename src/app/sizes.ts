@@ -5,6 +5,7 @@ export const SIZES = [
   { id: '1080p', name: '1080p (1920 × 1080)', width: 1920, height: 1080, tight: false },
   { id: 'youtube', name: 'YouTube thumbnail (1280 × 720)', width: 1280, height: 720, tight: false },
   { id: 'square', name: 'Square (2160 × 2160)', width: 2160, height: 2160, tight: false },
+  { id: 'reel', name: 'Reel or Story (2160 × 3840; clips 1080 × 1920)', width: 2160, height: 3840, tight: false },
 ] as const;
 export type Size = (typeof SIZES)[number];
 
