@@ -2,6 +2,7 @@ import { CLASSIC_SCREEN_ASPECT, composeBackdrop } from '../src/render/backdrop';
 import { cameraAt, encodeClip } from '../src/render/clip';
 import { encodePng, unpremultiply } from '../src/render/export';
 import { CharacterRenderer } from '../src/render/renderer';
+import { composeTitle, layTitle } from '../src/render/title';
 import { type Drawn, type Job, JOB_PART, JOB_PATH, PICTURE_PATH } from './job';
 import { unpack } from './wire';
 
@@ -44,6 +45,7 @@ async function shoot(): Promise<Drawn> {
   renderer.setBackdrop(backdrop);
   renderer.setPlace(job.place);
   renderer.hideCharacter(job.empty === true);
+  const title = composeTitle(job.title, width, height);
   const { clip } = job;
   if (clip) {
     const view = renderer;
@@ -58,14 +60,17 @@ async function shoot(): Promise<Drawn> {
       frame: async (i) => {
         view.setPose({ meshes: clip.poses[i]!, bounds: clip.framing, pose });
         const camera = clip.cameraTo ? cameraAt(job.camera, clip.cameraTo, i, clip.poses.length) : job.camera;
-        return view.renderImage(camera, { longSide: Math.max(width, height), aspect: width / height, tight: false });
+        return layTitle(view.renderImage(camera, { longSide: Math.max(width, height), aspect: width / height, tight: false }), title);
       },
     });
     await fetch(PICTURE_PATH, { method: 'POST', body: bytes as BodyInit });
     return { width, height, frames: clip.poses.length, problems: [...renderer.problems, ...renderer.placeProblems], graphics: graphics() };
   }
   // With a backdrop the whole frame is the picture; a tight crop is for a character alone.
-  const image = renderer.renderImage(job.camera, { longSide: Math.max(width, height), aspect: width / height, tight: job.tight && !backdrop && !job.place });
+  const tight = job.tight && !backdrop && !job.place;
+  const image = renderer.renderImage(job.camera, { longSide: Math.max(width, height), aspect: width / height, tight });
+  // A tight crop is not the size the title was drawn for, and has no room for one.
+  if (!tight) layTitle(image, title);
   unpremultiply(image.pixels);
   const png = await encodePng(image);
   await fetch(PICTURE_PATH, { method: 'POST', body: png as BodyInit });

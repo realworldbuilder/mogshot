@@ -1,4 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
+import { unzipSync } from 'fflate';
 import { globSync, readFileSync } from 'node:fs';
 import { hasClient, WOW_DIR } from '../test/node-source';
 import { writePng } from '../test/png';
@@ -428,6 +429,66 @@ test('stands the character in a place in the game world', async ({ page }) => {
 
   await page.locator('#place-spot').selectOption('none');
   await expect(canvas).toHaveAttribute('data-place', 'none');
+  expect(await problemsShown(page)).toEqual([]);
+});
+
+test('lays a title over the picture and the clip', async ({ page }) => {
+  await load(page, false);
+  await openAndDraw(page);
+  await page.locator('#size').selectOption('youtube');
+  const stage = page.locator('.stage');
+  const bare = await stage.screenshot();
+  /** How many of a picture's pixels are the title's yellow. */
+  const yellow = (image: { pixels: Uint8Array }) => {
+    let count = 0;
+    for (let i = 0; i < image.pixels.length; i += 4) if (image.pixels[i] === 255 && image.pixels[i + 1] === 209 && image.pixels[i + 2] === 0) count++;
+    return count;
+  };
+  const download = async () => {
+    const [file] = await Promise.all([page.waitForEvent('download'), page.locator('#download').click()]);
+    await file.saveAs('test-results/title-download.png');
+    return decodePng(readFileSync('test-results/title-download.png'));
+  };
+  expect(yellow(await download())).toBe(0);
+
+  // The words show over the preview, on a canvas over the picture's, to within half a pixel.
+  await page.locator('#title-text').fill('Rambleon');
+  await page.locator('#title-sub').fill('Level 60 Warrior');
+  const layer = page.locator('#title-layer');
+  await expect(layer).toBeVisible();
+  const over = (await layer.boundingBox())!;
+  const under = (await page.locator('#canvas').boundingBox())!;
+  for (const side of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(over[side] - under[side])).toBeLessThan(0.5);
+  const worded = await stage.screenshot({ path: 'test-results/title.png' });
+  expect(worded.equals(bare)).toBe(false);
+
+  // They are in the PNG, at its own size, and in every frame of a clip.
+  const image = await download();
+  expect([image.width, image.height]).toEqual([1280, 720]);
+  expect(yellow(image)).toBeGreaterThan(500);
+  await repose(page, () => page.locator('#animation').selectOption({ label: 'EmoteDance' }));
+  await page.locator('#clip-format').selectOption('frames');
+  const [clip] = await Promise.all([page.waitForEvent('download'), page.locator('#download-clip').click()]);
+  await clip.saveAs('test-results/title-frames.zip');
+  await expect(page.locator('#export-note')).toContainText('Saved');
+  const frames = Object.values(unzipSync(new Uint8Array(readFileSync('test-results/title-frames.zip'))));
+  expect(frames.length).toBeGreaterThan(10);
+  expect(yellow(decodePng(frames[0]!))).toBeGreaterThan(500);
+  expect(yellow(decodePng(frames.at(-1)!))).toBe(yellow(decodePng(frames[0]!)));
+
+  // A tight crop is saved without them, and the page says so first.
+  await page.locator('#size').selectOption('tight');
+  await expect(page.locator('#title-note')).toContainText('saved without it');
+  expect(yellow(await download())).toBe(0);
+
+  // The title is remembered for the next visit, and gone when its words are.
+  await page.reload();
+  await openAndDraw(page);
+  await expect(page.locator('#title-text')).toHaveValue('Rambleon');
+  await expect(layer).toBeVisible();
+  await page.locator('#title-text').fill('');
+  await page.locator('#title-sub').fill('');
+  await expect(layer).toHaveCount(0);
   expect(await problemsShown(page)).toEqual([]);
 });
 

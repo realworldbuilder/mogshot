@@ -139,6 +139,7 @@ footer {
 }
 
 .stage {
+  position: relative;
   display: flex;
   justify-content: center;
   margin: 0 0 12px;
@@ -159,6 +160,15 @@ footer {
 
 .stage canvas:active {
   cursor: grabbing;
+}
+
+/* The title's own canvas: the same size as the picture's, over it, and out of the mouse's way. */
+.stage canvas.title-layer {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 .hint {

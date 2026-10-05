@@ -3,6 +3,7 @@ import type { Image } from '../src/formats/blp';
 import type { Backdrop } from '../src/render/backdrop';
 import type { ClipFormat } from '../src/render/clip';
 import type { Camera } from '../src/render/renderer';
+import type { Title } from '../src/render/title';
 import type { PlaceScene } from '../src/world/place';
 
 /** One picture for the page to draw. Crosses from Node packed by `wire.ts`. */
@@ -20,6 +21,8 @@ export interface Job {
   place?: PlaceScene;
   /** Draw the place with nobody in it. */
   empty?: boolean;
+  /** Words laid over the picture, or over every frame of a clip. */
+  title?: Title;
   /** Draw a clip instead of a picture: the scene in each of these poses, one a frame. */
   clip?: {
     format: ClipFormat;

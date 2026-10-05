@@ -61,6 +61,8 @@ describe.skipIf(!hasClient)('a spec', () => {
         { out: 'tight.png', race: 'Human', sex: 'female', set: { class: 'Paladin' }, pose: 'Ready', size: { width: 600, height: 800, tight: true } },
         { out: 'backdrop.png', race: 'Tauren', sex: 'male', pose: { animation: 'EmoteDance', at: 0.3 }, size: { width: 640, height: 360 }, backdrop: 'Frost' },
         { out: 'bad.png', race: 'Tauren', sex: 'male', pose: 'Moonwalk' },
+        { out: 'titled.png', race: 'Tauren', sex: 'male', pose: { animation: 'EmoteDance', at: 0.3 }, size: { width: 640, height: 360 }, backdrop: 'Frost', title: { text: 'Moo', sub: 'of Thunder Bluff' } },
+        { out: 'untitled.png', race: 'Human', sex: 'female', title: 'Left off' },
       ]),
     );
     const { stdout } = await promisify(execFile)('node', [join(ROOT, 'bin', 'mogshot.mjs'), 'render', join(dir, 'shots.json'), '--wow', WOW_DIR]).catch(
@@ -70,7 +72,7 @@ describe.skipIf(!hasClient)('a spec', () => {
         return error;
       },
     );
-    const [tight, backdrop, bad] = JSON.parse(stdout) as { width: number; height: number; problems: string[]; pose: string; error?: string }[];
+    const [tight, backdrop, bad, titled, untitled] = JSON.parse(stdout) as { width: number; height: number; problems: string[]; pose: string; error?: string }[];
 
     expect(tight!.problems).toEqual([]);
     const cut = decodePng(new Uint8Array(await readFile(join(dir, 'tight.png'))));
@@ -87,6 +89,23 @@ describe.skipIf(!hasClient)('a spec', () => {
     expect(whole.pixels[3]).toBe(255);
 
     expect(bad!.error).toMatch(/no pose called "Moonwalk".*Stand/);
+
+    // The same picture with a title: the title's yellow in its top third, and the bottom untouched.
+    expect(titled!.problems).toEqual([]);
+    const worded = decodePng(new Uint8Array(await readFile(join(dir, 'titled.png'))));
+    const yellow = (image: typeof worded) => {
+      let count = 0;
+      const third = Math.floor(image.pixels.length / 12) * 4;
+      for (let i = 0; i < third; i += 4) if (image.pixels[i] === 255 && image.pixels[i + 1] === 209 && image.pixels[i + 2] === 0) count++;
+      return count;
+    };
+    expect(yellow(worded)).toBeGreaterThan(100);
+    expect(yellow(whole)).toBe(0);
+    const half = (worded.pixels.length / 8) * 4;
+    expect(Buffer.from(worded.pixels.subarray(half)).equals(Buffer.from(whole.pixels.subarray(half)))).toBe(true);
+
+    // A tight crop is saved without its title, and says so.
+    expect(untitled!.problems.join(' ')).toMatch(/tight crop has no room for a title/);
   }, 120_000);
 
   it('films a looping clip as video, GIF and PNG frames', async () => {

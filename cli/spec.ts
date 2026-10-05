@@ -7,6 +7,7 @@ import { resolveImport } from '../src/import/resolve';
 import { type Backdrop, GRADIENTS, NO_BACKDROP } from '../src/render/backdrop';
 import { CLIP_FPS, type ClipFormat, clipSize, evenSize, GIF_FPS } from '../src/render/clip';
 import { type Camera, DEFAULT_CAMERA } from '../src/render/renderer';
+import { hasTitle, type Title } from '../src/render/title';
 import type { Spot } from '../src/world/place';
 import type { MapInfo } from './session';
 
@@ -51,6 +52,11 @@ export interface Spec {
   place?: { map?: string | number; x: number; y: number; z?: number; facing?: number; reach?: number; empty?: boolean };
   camera?: Partial<Camera>;
   size?: string | { width: number; height: number; tight?: boolean };
+  /**
+   * Words over the picture or over every frame of a clip: a title, or a title with a smaller
+   * line under it (`sub`), near the top unless `at` says the bottom. A tight crop has no room for one.
+   */
+  title?: string | { text: string; sub?: string; at?: 'top' | 'bottom' };
   backdrop?:
     | string
     | { colour: string; vignette?: number }
@@ -98,6 +104,8 @@ export interface Shot {
   backdrop: Backdrop;
   /** The backdrop is a classic loading screen: a square the game stretches to 4:3. */
   classicScreen: boolean;
+  /** Words laid over the picture. */
+  title?: Title;
   problems: string[];
   notes: string[];
 }
@@ -245,6 +253,16 @@ function clipOf(spec: Spec): Shot['clip'] {
   return { format: kind, animation, seconds, loop: loop === true, fps: kind === 'gif' ? GIF_FPS : (fps ?? CLIP_FPS), cameraTo: to && cameraOf({ ...spec.camera, ...to }) };
 }
 
+/** The words to lay over the picture, if any. */
+export function titleOf(spec: Spec['title']): Title | undefined {
+  if (spec === undefined) return undefined;
+  const { text, sub, at = 'top' } = typeof spec === 'string' ? { text: spec } : spec;
+  if (at !== 'top' && at !== 'bottom') throw new Error(`A title is at the "top" or "bottom", not "${String(at)}"`);
+  const title: Title = { text: String(text ?? ''), ...(sub !== undefined && { sub: String(sub) }), at };
+  if (!hasTitle(title)) throw new Error('The title has no words');
+  return title;
+}
+
 /** A clip's size: a square unless said; a named size keeps its shape at video size; numbers are used as given. */
 function clipSizeOf(ref: Spec['size'], format: ClipFormat): PictureSize {
   const asked = sizeOf(ref ?? 'square');
@@ -330,6 +348,14 @@ export function resolveSpec(spec: Spec, world: World): Shot {
   else if (spec.pose) pose = { animationId: spec.pose.animationId, variation: spec.pose.variation ?? 0, time: spec.pose.time ?? 0 };
 
   const clip = clipOf(spec);
+  const size = clip ? clipSizeOf(spec.size, clip.format) : spec.place ? { ...sizeOf(spec.size ?? '1080p'), tight: false } : sizeOf(spec.size);
+  const backdrop = backdropOf(spec.backdrop, world.screens);
+  let title = titleOf(spec.title);
+  // As on the page: a tight crop is only taken of a character with nothing behind it.
+  if (title && size.tight && backdrop.backdrop.kind === 'none') {
+    title = undefined;
+    problems.push('A tight crop has no room for a title, so it was left off; give a "size" or a "backdrop"');
+  }
 
   return {
     raceId: race.id,
@@ -342,8 +368,9 @@ export function resolveSpec(spec: Spec, world: World): Shot {
     place: placeOf(spec.place, world.maps),
     empty: spec.place?.empty === true,
     camera: cameraOf(spec.camera),
-    size: clip ? clipSizeOf(spec.size, clip.format) : spec.place ? { ...sizeOf(spec.size ?? '1080p'), tight: false } : sizeOf(spec.size),
-    ...backdropOf(spec.backdrop, world.screens),
+    size,
+    ...backdrop,
+    title,
     problems,
     notes,
   };

@@ -6,7 +6,7 @@ Ideas that are not the one job (folder → character → pose → transparent PN
 - The 3D character-select screens as places
 - Spots saved by the addon listed on the page (a pasted line from /mogshot spot is built)
 - Animation sequences
-- Captions and stickers
+- Stickers, and a choice of fonts and colours for the title (a title and a second line are built)
 - Share codes
 - 3D export
 - Creature and mount browser

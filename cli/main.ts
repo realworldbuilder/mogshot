@@ -49,6 +49,9 @@ Everything is printed as JSON. A spec, with every field but a race or a characte
                                                   "empty": true draws the place with nobody in it
     "camera": { "yaw": 25, "pitch": 5, "zoom": 1.2, "fov": 30, "panX": 0, "panY": 0 },   degrees
     "size": "square",                             or { "width": 1080, "height": 1350, "tight": false }; default "tight" (a clip: "square", at 1080)
+    "title": "Rambleon",                          words over the picture or the clip; or { "text": "Rambleon",
+                                                  "sub": "Level 60 Warrior", "at": "bottom" } for a smaller second line
+                                                  and the bottom in place of the top. Not on a tight crop
     "backdrop": "Frost"                           a gradient, "#1c1f26", { "screen": "Teldrassil", "blur": 8, "vignette": 0.4 },
   }                                               { "gradient": {"from","to"}, "shape": "vertical" }; default none (transparent)
 
@@ -200,6 +203,7 @@ async function render(file: string | undefined, session: Session, host: Host): P
           scene, camera: shot.camera, ...shot.size, backdrop: shot.backdrop, screen, classicScreen: shot.classicScreen,
           place,
           empty: shot.empty,
+          title: shot.title,
           clip: clip && { format: clip.format, fps: clip.fps, framing: clip.framing, poses: clip.poses, cameraTo: clip.cameraTo },
         };
         room ??= await Darkroom.open(await host.harness());

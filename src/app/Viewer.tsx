@@ -9,6 +9,7 @@ import { type Backdrop, backdropImage, slug } from '../render/backdrop';
 import { CLIP_FPS, CLIP_FORMATS, type ClipFormat, clipSize, clipTimes, encodeClip, GIF_FPS, loopedTimes } from '../render/clip';
 import { encodePng, unpremultiply } from '../render/export';
 import { type Camera, CharacterRenderer, DEFAULT_CAMERA } from '../render/renderer';
+import { composeTitle, drawTitle, hasTitle, layTitle, type Title } from '../render/title';
 import type { LoadingScreen, Race } from '../worker/api';
 import type { DataClient } from '../worker/client';
 import { messageOf } from './App';
@@ -16,6 +17,7 @@ import { BackdropControls, backdropName, compose, drawable, type LoadScreen, scr
 import { GearPanel } from './GearPanel';
 import { ImportPanel } from './ImportPanel';
 import { type PlaceChoice, PlaceControls, recallPlace, rememberPlace } from './PlaceControls';
+import { recallTitle, rememberTitle, TitleControls } from './TitleControls';
 import { downloadFile, downloadPng, previewSize, savedNote, type Size, SIZES } from './sizes';
 
 const SEX_NAMES = ['Male', 'Female'];
@@ -141,6 +143,9 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
   const [clipFormat, setClipFormat] = useState<ClipFormat>('mp4');
   // Seconds the clip should run for, by playing the animation over; 0 for a single pass.
   const [clipLength, setClipLength] = useState(0);
+  // Words laid over the picture and the clip, shown over the preview on a canvas of their own.
+  const [title, setTitle] = useState<Title>(recallTitle);
+  const titleCanvas = useRef<HTMLCanvasElement>(null);
   // The backdrop as drawn behind the preview, kept to give a renderer created later.
   const backdropSource = useRef<ReturnType<typeof compose>>(undefined);
 
@@ -285,6 +290,17 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
   }, [place?.blur]);
   /** The picture is filled edge to edge: by a backdrop, or by a place. */
   const inPlace = placed.state === 'shown';
+  /** The PNG is cropped to the character, which leaves no room for a title. */
+  const cropped = size.tight && !hasBackdrop && !inPlace;
+
+  // The title over the preview, drawn as it will be over the picture.
+  useEffect(() => {
+    rememberTitle(title);
+    const layer = titleCanvas.current;
+    if (!layer) return;
+    layer.getContext('2d')?.clearRect(0, 0, layer.width, layer.height);
+    drawTitle(layer, title);
+  }, [title.text, title.sub, title.at, preview.width, preview.height]);
 
   // Camera: drag to turn, shift-drag (or right-drag) to slide, wheel to zoom.
   useEffect(() => {
@@ -444,8 +460,9 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
       const image = view.renderImage(camera.current, {
         longSide: Math.max(size.width, size.height),
         aspect: size.tight && !hasBackdrop ? preview.width / preview.height : size.width / size.height,
-        tight: size.tight && !hasBackdrop && !inPlace,
+        tight: cropped,
       });
+      if (!cropped) layTitle(image, composeTitle(title, image.width, image.height));
       unpremultiply(image.pixels);
       return { image, png: await encodePng(image) };
     } finally {
@@ -486,6 +503,7 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
     try {
       if (hasBackdrop) view.setBackdrop(composeAt(width, height));
       view.holdFraming((await data.pose(sequence, 0)).bounds);
+      const words = composeTitle(title, width, height);
       const bytes = await encodeClip({
         format: clipFormat,
         width,
@@ -494,7 +512,7 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
         frames: times.length,
         frame: async (i) => {
           view.setPose(await data.pose(sequence, times[i]!));
-          return view.renderImage(camera.current, { longSide: Math.max(width, height), aspect: width / height, tight: false });
+          return layTitle(view.renderImage(camera.current, { longSide: Math.max(width, height), aspect: width / height, tight: false }), words);
         },
         onProgress: (done, of) => setExportNote({ bad: false, text: `Drawing frame ${done} of ${of}…` }),
       });
@@ -570,6 +588,7 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
                 data-backdrop={hasBackdrop ? backdropName(backdrop, screens) : ''}
                 data-place={placed.state}
               />
+              {hasTitle(title) && <canvas id="title-layer" class="title-layer" ref={titleCanvas} width={preview.width} height={preview.height} />}
             </div>
             <p class="dim small hint">
               Drag to turn, shift-drag to slide, scroll to zoom.{' '}
@@ -660,6 +679,8 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
             </div>
 
             <PlaceControls place={place} onChange={setPlace} busy={placed.state === 'reading'} problem={placed.problem} />
+
+            <TitleControls title={title} onChange={setTitle} cropped={cropped} />
 
             {active && (
               <BackdropControls backdrop={backdrop} onChange={onBackdrop} screens={screens} problem={screenProblem(backdrop, screen, screens)} />
