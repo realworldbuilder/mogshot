@@ -37,15 +37,18 @@ export interface Spec {
   /**
    * A looping clip instead of a picture: one pass of the pose's animation (or the one named),
    * or `seconds` of it going round. 30 frames a second unless said; a GIF is always 25.
+   * With `loop`, `seconds` is rounded to whole passes so the end meets the start. `to` is
+   * the camera at the end (fields as in `camera`): the view moves there over the clip.
    */
-  clip?: true | { animation?: string; seconds?: number; fps?: number };
+  clip?: true | { animation?: string; seconds?: number; loop?: boolean; fps?: number; to?: Partial<Camera> };
   /**
    * Stand the character in the game world: a map by name or number (Eastern Kingdoms unless
    * said) and the position the game reports there (/script print(UnitPosition("player"))).
    * `z` picks between floors; `facing` is degrees anticlockwise from north; `reach` is how
    * many yards of world are drawn. The place fills the frame, in place of a backdrop.
+   * `empty` leaves the character out: the view it would have had, with nobody in it.
    */
-  place?: { map?: string | number; x: number; y: number; z?: number; facing?: number; reach?: number };
+  place?: { map?: string | number; x: number; y: number; z?: number; facing?: number; reach?: number; empty?: boolean };
   camera?: Partial<Camera>;
   size?: string | { width: number; height: number; tight?: boolean };
   backdrop?:
@@ -85,9 +88,11 @@ export interface Shot {
   /** An animation asked for by name, found once the model is read. */
   animation?: { name: string; at: number };
   /** A clip to film instead of a picture to take. */
-  clip?: { format: ClipFormat; animation?: string; seconds?: number; fps: number };
+  clip?: { format: ClipFormat; animation?: string; seconds?: number; loop: boolean; fps: number; cameraTo?: Camera };
   /** Where in the game world the character stands, if anywhere. */
   place?: Spot;
+  /** The place is drawn without the character. */
+  empty: boolean;
   camera: Camera;
   size: PictureSize;
   backdrop: Backdrop;
@@ -232,11 +237,12 @@ function clipOf(spec: Spec): Shot['clip'] {
     return undefined;
   }
   if (spec.out !== undefined && !format) throw new Error(`A clip is saved as .mp4, .gif or .zip (PNG frames), not "${spec.out}"`);
-  const { animation, seconds, fps } = spec.clip === true ? {} : spec.clip;
+  const { animation, seconds, loop, fps, to } = spec.clip === true ? ({} as Exclude<Spec['clip'], true | undefined>) : spec.clip;
   if (seconds !== undefined && !(seconds > 0 && seconds <= 60)) throw new Error('A clip is between 0 and 60 seconds long');
   if (fps !== undefined && !(fps >= 1 && fps <= 60)) throw new Error('A clip has 1 to 60 frames a second');
   const kind = format ?? 'mp4';
-  return { format: kind, animation, seconds, fps: kind === 'gif' ? GIF_FPS : (fps ?? CLIP_FPS) };
+  if (loop && seconds === undefined) throw new Error('"loop" rounds "seconds" to whole passes of the animation; give the seconds too');
+  return { format: kind, animation, seconds, loop: loop === true, fps: kind === 'gif' ? GIF_FPS : (fps ?? CLIP_FPS), cameraTo: to && cameraOf({ ...spec.camera, ...to }) };
 }
 
 /** A clip's size: a square unless said; a named size keeps its shape at video size; numbers are used as given. */
@@ -290,6 +296,8 @@ export function resolveSpec(spec: Spec, world: World): Shot {
   }
   if (spec.race !== undefined) raceId = raceOf(appearance, spec.race).id;
   if (spec.sex !== undefined) sex = sexOf(spec.sex);
+  // An empty place still needs a figure to frame the camera on; any will do.
+  if (raceId === undefined && spec.place?.empty) raceId = appearance.races[0]?.id;
   if (raceId === undefined) throw new Error('The spec names no race and no character');
   const race = raceOf(appearance, raceId);
   sex ??= race.sexes[0] ?? 0;
@@ -332,6 +340,7 @@ export function resolveSpec(spec: Spec, world: World): Shot {
     animation,
     clip,
     place: placeOf(spec.place, world.maps),
+    empty: spec.place?.empty === true,
     camera: cameraOf(spec.camera),
     size: clip ? clipSizeOf(spec.size, clip.format) : spec.place ? { ...sizeOf(spec.size ?? '1080p'), tight: false } : sizeOf(spec.size),
     ...backdropOf(spec.backdrop, world.screens),

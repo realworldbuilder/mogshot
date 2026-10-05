@@ -1,6 +1,7 @@
 import { zipSync } from 'fflate';
 import type { Image } from '../formats/blp';
 import { encodePng, unpremultiply } from './export';
+import type { Camera } from './renderer';
 
 /*
  * A clip: the character drawn at evenly spaced moments of an animation and written as one
@@ -47,6 +48,24 @@ export function loopedTimes(durationMs: number, fps: number, seconds: number): n
   if (!(durationMs > 0)) return once;
   const loops = Math.max(1, Math.round((seconds * 1000) / durationMs));
   return Array.from({ length: loops }, () => once).flat();
+}
+
+/**
+ * The camera for frame `index` of `frames` in a clip whose camera moves from one view to
+ * another. The frame after the last would arrive, so a move that comes back to where it
+ * began (a full turn of yaw) loops without a seam.
+ */
+export function cameraAt(from: Camera, to: Camera, index: number, frames: number): Camera {
+  const t = frames > 0 ? index / frames : 0;
+  const mix = (a: number, b: number) => a + (b - a) * t;
+  return {
+    yaw: mix(from.yaw, to.yaw),
+    pitch: mix(from.pitch, to.pitch),
+    fov: mix(from.fov, to.fov),
+    zoom: mix(from.zoom, to.zoom),
+    panX: mix(from.panX, to.panX),
+    panY: mix(from.panY, to.panY),
+  };
 }
 
 /**

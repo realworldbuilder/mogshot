@@ -101,6 +101,9 @@ describe.skipIf(!hasClient)('a spec', () => {
         { out: 'place.png', race: 'Dwarf', sex: 'male', place: { x: -8833, y: 628, facing: 215 }, size: { width: 640, height: 360 } },
         { out: 'clip.png', race: 'Human', clip: true },
         { out: 'still.mp4', race: 'Human' },
+        { out: 'turn.zip', race: 'Human', sex: 'female', clip: { seconds: 0.4, fps: 10, to: { yaw: 120 } }, size: { width: 200, height: 250 } },
+        { out: 'looped.zip', race: 'Human', sex: 'female', clip: { seconds: 0.1, loop: true, fps: 5 }, size: { width: 100, height: 100 } },
+        { out: 'nobody.png', race: 'Dwarf', sex: 'male', place: { x: -8833, y: 628, facing: 215, empty: true }, size: { width: 640, height: 360 } },
       ]),
     );
     const { stdout } = await promisify(execFile)('node', [join(ROOT, 'bin', 'mogshot.mjs'), 'render', join(dir, 'clips.json'), '--wow', WOW_DIR]).catch(
@@ -110,7 +113,7 @@ describe.skipIf(!hasClient)('a spec', () => {
       },
     );
     type Report = { width: number; height: number; problems: string[]; error?: string; clip: { animation: string; frames: number; fps: number; length: number } };
-    const [stand, dance, frames, placed, wrongName, noClip] = JSON.parse(stdout) as (Report & { place: { ground: number[]; props: number } })[];
+    const [stand, dance, frames, placed, wrongName, noClip, turn, looped, nobody] = JSON.parse(stdout) as (Report & { place: { ground: number[]; props: number } })[];
 
     expect(stand!.problems).toEqual([]);
     expect(stand!.clip).toMatchObject({ animation: 'Stand', fps: 30 });
@@ -148,5 +151,19 @@ describe.skipIf(!hasClient)('a spec', () => {
 
     expect(wrongName!.error).toMatch(/saved as .mp4, .gif or .zip/);
     expect(noClip!.error).toMatch(/add "clip": true/);
-  }, 180_000);
+
+    // A camera that turns: the same pose seen from two sides.
+    expect(turn!.clip.frames).toBe(4);
+    const turned = unzipSync(new Uint8Array(await readFile(join(dir, 'turn.zip'))));
+    expect(Buffer.from(turned['frame-0001.png']!).equals(Buffer.from(turned['frame-0004.png']!))).toBe(false);
+
+    // A looped length is whole passes: one pass at least, however short the length asked for.
+    expect(looped!.clip.frames).toBeGreaterThan(1);
+
+    // The same place with nobody in it: a full picture that differs from the one with the dwarf.
+    expect(nobody!.problems).toEqual([]);
+    const vacant = decodePng(new Uint8Array(await readFile(join(dir, 'nobody.png'))));
+    expect(vacant.pixels[3]).toBe(255);
+    expect(Buffer.from(vacant.pixels).equals(Buffer.from(there.pixels))).toBe(false);
+  }, 240_000);
 });

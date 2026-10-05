@@ -145,6 +145,7 @@ export class CharacterRenderer {
   private meshes: GpuMesh[] = [];
   private textures: WebGLTexture[] = [];
   private draws: PreparedDraw[] = [];
+  private hidden = false;
   private bounds: CharacterScene['bounds'] = { min: [0, 0, 0], max: [0, 0, 0] };
   /** The box the camera frames while a clip plays, in place of each pose's own. */
   private framing: CharacterScene['bounds'] | undefined;
@@ -391,6 +392,11 @@ export class CharacterRenderer {
    */
   holdFraming(bounds: CharacterScene['bounds'] | undefined): void {
     this.framing = bounds;
+  }
+
+  /** Leave the character and its shadow out: a place with nobody in it. The camera is framed as if it were there. */
+  hideCharacter(hidden: boolean): void {
+    this.hidden = hidden;
   }
 
   /** Draw the scene to the canvas. The canvas's pixel size is used as it is. */
@@ -663,7 +669,7 @@ export class CharacterRenderer {
     }
     gl.uniform1f(uniforms.u_reach, 0);
     for (const mesh of this.meshes) this.aimBillboards(mesh, axes);
-    for (const draw of this.draws) this.drawBatch(draw, this.textures);
+    if (!this.hidden) for (const draw of this.draws) this.drawBatch(draw, this.textures);
 
     gl.bindVertexArray(null);
     gl.depthMask(true);
@@ -785,7 +791,7 @@ export class CharacterRenderer {
         gl.enable(gl.BLEND);
         gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         // The character's shadow lies on the solid ground, under any water or glass.
-        if (this.draws.length > 0) {
+        if (this.draws.length > 0 && !this.hidden) {
           const { min, max } = this.framing ?? this.bounds;
           const radius = Math.max(max[0] - min[0], max[1] - min[1]) * 0.6;
           const shadow = new Float32Array([radius, 0, 0, 0, 0, radius, 0, 0, 0, 0, 1, 0, (min[0] + max[0]) / 2, (min[1] + max[1]) / 2, 0, 1]);

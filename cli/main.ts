@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { SLOTS, type Slot } from '../src/character/equipment';
 import { buildCharacterScene, type CharacterRig, type CharacterScene } from '../src/character/scene';
-import { CLIP_FORMATS, clipTimes } from '../src/render/clip';
+import { CLIP_FORMATS, clipTimes, loopedTimes } from '../src/render/clip';
 import { buildPlace } from '../src/world/place';
 import { capturedAgo } from '../src/import/record';
 import { GRADIENTS } from '../src/render/backdrop';
@@ -40,10 +40,13 @@ Everything is printed as JSON. A spec, with every field but a race or a characte
     "clip": true,                                 a looping clip of the pose's animation instead of a picture; "out" ends
                                                   .mp4, .gif or .zip (transparent PNG frames). Or { "animation": "EmoteDance",
                                                   "seconds": 10, "fps": 30 }; without seconds, one pass, which loops cleanly.
+                                                  "loop": true rounds the seconds to whole passes, so that loops too.
+                                                  "to": { "yaw": 60, "zoom": 0.8 } moves the camera there over the clip
                                                   "size": "reel" makes it 1080 × 1920
     "place": { "x": -8833, "y": 628, "facing": 215 },   stand in the game world, at the position /mogshot spot prints in the game;
                                                   also "map" (name or number, default Eastern Kingdoms), "z" to pick a floor,
-                                                  "reach" in yards (default 300). Fills the frame; default size "1080p"
+                                                  "reach" in yards (default 300). Fills the frame; default size "1080p".
+                                                  "empty": true draws the place with nobody in it
     "camera": { "yaw": 25, "pitch": 5, "zoom": 1.2, "fov": 30, "panX": 0, "panY": 0 },   degrees
     "size": "square",                             or { "width": 1080, "height": 1350, "tight": false }; default "tight" (a clip: "square", at 1080)
     "backdrop": "Frost"                           a gradient, "#1c1f26", { "screen": "Teldrassil", "blur": 8, "vignette": 0.4 },
@@ -196,7 +199,8 @@ async function render(file: string | undefined, session: Session, host: Host): P
         const job: Job = {
           scene, camera: shot.camera, ...shot.size, backdrop: shot.backdrop, screen, classicScreen: shot.classicScreen,
           place,
-          clip: clip && { format: clip.format, fps: clip.fps, framing: clip.framing, poses: clip.poses },
+          empty: shot.empty,
+          clip: clip && { format: clip.format, fps: clip.fps, framing: clip.framing, poses: clip.poses, cameraTo: clip.cameraTo },
         };
         room ??= await Darkroom.open(await host.harness());
         const drawn = await room.shoot(pack(job));
@@ -265,7 +269,8 @@ async function film(clip: NonNullable<Shot['clip']>, scene: CharacterScene, rig:
     : scene.animations.find((a) => a.sequence === scene.pose.sequence);
   if (!animation) throw new Error('This character is in its rest pose, which has no animation to film');
   const poses = [];
-  for (const time of clipTimes(animation.duration, clip.fps, clip.seconds)) poses.push((await rig.pose(animation.sequence, time)).meshes);
+  const times = clip.loop && clip.seconds !== undefined ? loopedTimes(animation.duration, clip.fps, clip.seconds) : clipTimes(animation.duration, clip.fps, clip.seconds);
+  for (const time of times) poses.push((await rig.pose(animation.sequence, time)).meshes);
   // The camera stays framed on the animation's first moment.
   const framing = (await rig.pose(animation.sequence, 0)).bounds;
   return { ...clip, animation: animation.name, framing, poses };

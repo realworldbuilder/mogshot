@@ -1,5 +1,5 @@
 import { CLASSIC_SCREEN_ASPECT, composeBackdrop } from '../src/render/backdrop';
-import { encodeClip } from '../src/render/clip';
+import { cameraAt, encodeClip } from '../src/render/clip';
 import { encodePng, unpremultiply } from '../src/render/export';
 import { CharacterRenderer } from '../src/render/renderer';
 import { type Drawn, type Job, JOB_PART, JOB_PATH, PICTURE_PATH } from './job';
@@ -43,6 +43,7 @@ async function shoot(): Promise<Drawn> {
   const backdrop = composeBackdrop(job.backdrop, width, height, job.screen, job.classicScreen ? CLASSIC_SCREEN_ASPECT : undefined);
   renderer.setBackdrop(backdrop);
   renderer.setPlace(job.place);
+  renderer.hideCharacter(job.empty === true);
   const { clip } = job;
   if (clip) {
     const view = renderer;
@@ -56,7 +57,8 @@ async function shoot(): Promise<Drawn> {
       frames: clip.poses.length,
       frame: async (i) => {
         view.setPose({ meshes: clip.poses[i]!, bounds: clip.framing, pose });
-        return view.renderImage(job.camera, { longSide: Math.max(width, height), aspect: width / height, tight: false });
+        const camera = clip.cameraTo ? cameraAt(job.camera, clip.cameraTo, i, clip.poses.length) : job.camera;
+        return view.renderImage(camera, { longSide: Math.max(width, height), aspect: width / height, tight: false });
       },
     });
     await fetch(PICTURE_PATH, { method: 'POST', body: bytes as BodyInit });

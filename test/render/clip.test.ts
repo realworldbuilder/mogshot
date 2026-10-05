@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { clipFormatOf } from '../../cli/spec';
-import { clipSize, clipTimes, evenSize, loopedTimes, toI420 } from '../../src/render/clip';
+import { cameraAt, clipSize, clipTimes, evenSize, loopedTimes, toI420 } from '../../src/render/clip';
+import { DEFAULT_CAMERA } from '../../src/render/renderer';
 
 describe('a clip', () => {
   it('is one pass of the animation, ending a frame before it begins again', () => {
@@ -22,6 +23,17 @@ describe('a clip', () => {
     expect(times[10]).toBeCloseTo(0);
     expect(times[24]).toBeCloseTo(400);
     for (const time of times) expect(time).toBeLessThan(1000);
+  });
+
+  it('moves the camera evenly from one view towards another, arriving the frame after the last', () => {
+    const to = { ...DEFAULT_CAMERA, yaw: DEFAULT_CAMERA.yaw + 2 * Math.PI, zoom: 0.5 };
+    expect(cameraAt(DEFAULT_CAMERA, to, 0, 60)).toEqual(DEFAULT_CAMERA);
+    const half = cameraAt(DEFAULT_CAMERA, to, 30, 60);
+    expect(half.yaw).toBeCloseTo(DEFAULT_CAMERA.yaw + Math.PI);
+    expect(half.zoom).toBeCloseTo((DEFAULT_CAMERA.zoom + 0.5) / 2);
+    expect(half.pitch).toBe(DEFAULT_CAMERA.pitch);
+    // A full turn never repeats its first frame, so it loops.
+    expect(cameraAt(DEFAULT_CAMERA, to, 59, 60).yaw).toBeLessThan(to.yaw);
   });
 
   it('runs for about a length by playing the animation a whole number of times', () => {

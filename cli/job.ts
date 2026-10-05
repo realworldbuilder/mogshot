@@ -18,6 +18,8 @@ export interface Job {
   classicScreen: boolean;
   /** The world the character stands in, if any. */
   place?: PlaceScene;
+  /** Draw the place with nobody in it. */
+  empty?: boolean;
   /** Draw a clip instead of a picture: the scene in each of these poses, one a frame. */
   clip?: {
     format: ClipFormat;
@@ -25,6 +27,8 @@ export interface Job {
     /** The box the camera stays framed on. */
     framing: CharacterScene['bounds'];
     poses: PoseResult['meshes'][];
+    /** Where the camera has moved to by the end; without it, the camera stays still. */
+    cameraTo?: Camera;
   };
 }
 
