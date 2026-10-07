@@ -34,8 +34,33 @@ async function redraw(page: Page, action: () => Promise<unknown>): Promise<void>
   await expect(page.locator('#canvas.building')).toHaveCount(0);
 }
 
+/** Open one of the side panels, if it is not open already. Opening one closes any other. */
+async function openDrawer(page: Page, name: 'look' | 'gear' | 'pose' | 'scene' | 'export'): Promise<void> {
+  const toggle = page.locator(`#open-${name}`);
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+}
+
+/** Close the side panel if one is open: it lies over the Horde rail and the end of the class bar. */
+async function closeDrawer(page: Page): Promise<void> {
+  const close = page.locator('#close-drawer');
+  if (await close.isVisible()) await close.click();
+}
+
+/** Pick a race by its portrait on the rails. */
+async function pickRace(page: Page, name: string): Promise<void> {
+  await closeDrawer(page);
+  await page.locator(`[data-race="${name}"]`).click();
+}
+
+/** Pick a class by its portrait along the bottom. */
+async function pickClass(page: Page, name: string): Promise<void> {
+  await closeDrawer(page);
+  await page.locator(`[data-class="${name}"]`).click();
+}
+
 /** Put an item in a slot by searching for its name, as a user would. */
 async function equip(page: Page, slot: string, name: string): Promise<void> {
+  await openDrawer(page, 'gear');
   const row = page.locator(`[data-slot="${slot}"]`);
   await row.locator('.slot-pick').click();
   await row.locator('input').fill(name);
@@ -93,9 +118,14 @@ test('explains a dropped folder that is not a WoW folder', async ({ page }) => {
 test('draws a human male first, with nothing missing', async ({ page }) => {
   const requests = await load(page, false);
   await openAndDraw(page);
-  await expect(page.locator('#race option:checked')).toHaveText('Human');
+  await expect(page.locator('[data-race][aria-checked="true"]')).toHaveText('Human');
   await expect(page.locator('#sex .on')).toHaveText('Male');
   await expect(page.locator('#character-problems')).toHaveCount(0);
+  // Each faction has races on its side, and every race and class picture was found in the game's atlas.
+  expect(await page.locator('.rail-alliance [data-race]').count()).toBeGreaterThan(0);
+  expect(await page.locator('.rail-horde [data-race]').count()).toBeGreaterThan(0);
+  await expect(page.locator('#portrait-note')).toHaveCount(0);
+  expect(await page.locator('#class [data-class]').count()).toBeGreaterThanOrEqual(9);
   expect(requests.some((url) => url.startsWith(DEFINITIONS))).toBe(true);
   expect(requests.filter((url) => !url.startsWith(DEFINITIONS))).toEqual([]);
   // Kept for looking at by eye; test-results/ is not committed.
@@ -104,14 +134,14 @@ test('draws a human male first, with nothing missing', async ({ page }) => {
 
 /** Step through every race and sex, saving a picture of each and collecting anything reported missing. */
 async function everyRace(page: Page, folder: string): Promise<string[]> {
-  const races = await page.locator('#race option').allInnerTexts();
+  const races = await page.locator('[data-race] .portrait-name').allInnerTexts();
   expect(races.length).toBeGreaterThanOrEqual(8);
   const missing: string[] = [];
   let first = true;
   for (const race of races) {
     for (const sex of ['Male', 'Female']) {
       const select = async () => {
-        await page.locator('#race').selectOption({ label: race });
+        await pickRace(page, race);
         await page.locator('#sex button', { hasText: new RegExp(`^${sex}$`) }).click();
       };
       // The first combination is already on screen.
@@ -202,6 +232,7 @@ test('changes the picture when an appearance choice changes', async ({ page }) =
   await load(page, false);
   await openAndDraw(page);
   const before = await page.locator('#canvas').screenshot();
+  await openDrawer(page, 'look');
   const hair = page.locator('select[data-option="Hair Style"]');
   await redraw(page, () => hair.selectOption({ index: 3 }));
   const after = await page.locator('#canvas').screenshot({ path: 'test-results/human-male-hair.png' });
@@ -301,9 +332,10 @@ test('strikes every curated pose, dressed and armed', async ({ page }) => {
   for (const [slot, name] of PLATE) await equip(page, slot, name);
   for (const [race, sex] of [['Human', 'Male'], ['Tauren', 'Female'], ['Gnome', 'Male']]) {
     await redraw(page, async () => {
-      await page.locator('#race').selectOption({ label: race! });
+      await pickRace(page, race!);
       if ((await page.locator('#sex .on').innerText()) !== sex) await page.locator('#sex button', { hasText: new RegExp(`^${sex}$`) }).click();
     }).catch(() => undefined); // the first combination may already be on screen
+    await openDrawer(page, 'pose');
     const names = await page.locator('#presets button').allInnerTexts();
     expect(names).toEqual(['Stand', 'Ready', 'Attack', 'Cast', 'Roar', 'Cheer', 'Point', 'Flex', 'Salute', 'Wave', 'Kneel']);
     const pictures = new Set<string>();
@@ -325,8 +357,9 @@ test('strikes every curated pose, dressed and armed', async ({ page }) => {
 test('keeps the pose when the race changes', async ({ page }) => {
   await load(page, false);
   await openAndDraw(page);
+  await openDrawer(page, 'pose');
   await repose(page, () => page.locator('#presets button', { hasText: /^Cheer$/ }).click());
-  await redraw(page, () => page.locator('#race').selectOption({ label: 'Orc' }));
+  await redraw(page, () => pickRace(page, 'Orc'));
   await expect(page.locator('#presets button.on')).toHaveText('Cheer');
 });
 
@@ -334,6 +367,7 @@ test('scrubs through any animation', async ({ page }) => {
   await load(page, false);
   await openAndDraw(page);
   const start = await page.locator('#canvas').screenshot();
+  await openDrawer(page, 'pose');
   await repose(page, () => page.locator('#animation').selectOption({ label: 'EmoteDance' }));
   await expect(page.locator('#time-label')).toContainText('0.00 of');
   // No curated pose is selected once an animation is picked by hand.
@@ -351,6 +385,7 @@ test('plays an animation and saves it as a clip', async ({ page }) => {
   await load(page, false);
   await openAndDraw(page);
   await page.locator('#size').selectOption('youtube');
+  await openDrawer(page, 'pose');
   await repose(page, () => page.locator('#animation').selectOption({ label: 'EmoteDance' }));
   const canvas = page.locator('#canvas');
 
@@ -367,6 +402,7 @@ test('plays an animation and saves it as a clip', async ({ page }) => {
   expect(await canvas.getAttribute('data-pose')).toBe(held);
 
   const save = async (format: string, name: string) => {
+    await openDrawer(page, 'export');
     await page.locator('#clip-format').selectOption(format);
     const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#download-clip').click()]);
     expect(download.suggestedFilename()).toBe(name);
@@ -386,6 +422,7 @@ test('plays an animation and saves it as a clip', async ({ page }) => {
 
   // A Reel: upright, and long enough by playing the dance over.
   await page.locator('#size').selectOption('reel');
+  await openDrawer(page, 'export');
   await page.locator('#clip-length').selectOption('5');
   const reel = await save('mp4', 'mogshot-human-male-emotedance.mp4');
   expect(reel.includes('mp4a')).toBe(true);
@@ -393,7 +430,7 @@ test('plays an animation and saves it as a clip', async ({ page }) => {
   await page.locator('#size').selectOption('youtube');
 
   // The page is back on the moment it was paused at, and nothing is wrong.
-  await page.locator('.viewer > div').first().screenshot({ path: 'test-results/clip-controls.png' });
+  await page.locator('#select').screenshot({ path: 'test-results/clip-controls.png' });
   expect(await canvas.getAttribute('data-pose')).toBe(held);
   expect(await problemsShown(page)).toEqual([]);
 });
@@ -405,6 +442,7 @@ test('stands the character in a place in the game world', async ({ page }) => {
   const canvas = page.locator('#canvas');
   const alone = await canvas.screenshot();
 
+  await openDrawer(page, 'scene');
   await page.locator('#place-spot').selectOption({ label: 'Elwynn Forest, near Goldshire' });
   await expect(canvas).toHaveAttribute('data-place', 'shown', { timeout: 60_000 });
   await expect(page.locator('#place-note')).toHaveCount(0);
@@ -427,6 +465,7 @@ test('stands the character in a place in the game world', async ({ page }) => {
   await expect(canvas).toHaveAttribute('data-place', 'shown', { timeout: 60_000 });
   await canvas.screenshot({ path: 'test-results/place-stormwind.png' });
 
+  await openDrawer(page, 'scene');
   await page.locator('#place-spot').selectOption('none');
   await expect(canvas).toHaveAttribute('data-place', 'none');
   expect(await problemsShown(page)).toEqual([]);
@@ -452,6 +491,7 @@ test('lays a title over the picture and the clip', async ({ page }) => {
   expect(yellow(await download())).toBe(0);
 
   // The words show over the preview, on a canvas over the picture's, to within half a pixel.
+  await openDrawer(page, 'scene');
   await page.locator('#title-text').fill('Rambleon');
   await page.locator('#title-sub').fill('Level 60 Warrior');
   const layer = page.locator('#title-layer');
@@ -466,7 +506,9 @@ test('lays a title over the picture and the clip', async ({ page }) => {
   const image = await download();
   expect([image.width, image.height]).toEqual([1280, 720]);
   expect(yellow(image)).toBeGreaterThan(500);
+  await openDrawer(page, 'pose');
   await repose(page, () => page.locator('#animation').selectOption({ label: 'EmoteDance' }));
+  await openDrawer(page, 'export');
   await page.locator('#clip-format').selectOption('frames');
   const [clip] = await Promise.all([page.waitForEvent('download'), page.locator('#download-clip').click()]);
   await clip.saveAs('test-results/title-frames.zip');
@@ -486,6 +528,7 @@ test('lays a title over the picture and the clip', async ({ page }) => {
   await openAndDraw(page);
   await expect(page.locator('#title-text')).toHaveValue('Rambleon');
   await expect(layer).toBeVisible();
+  await openDrawer(page, 'scene');
   await page.locator('#title-text').fill('');
   await page.locator('#title-sub').fill('');
   await expect(layer).toHaveCount(0);
@@ -511,6 +554,7 @@ test('turns, zooms and resets the camera', async ({ page }) => {
   const zoomed = await canvas.screenshot({ path: 'test-results/camera-zoomed.png' });
   expect(zoomed.equals(turned)).toBe(false);
 
+  await openDrawer(page, 'pose');
   await page.locator('#fov').fill('60');
   const wide = await canvas.screenshot({ path: 'test-results/camera-wide.png' });
   expect(wide.equals(zoomed)).toBe(false);
@@ -570,11 +614,13 @@ test('remembers the character and opens quickly on a return visit, even offline'
   await load(page, false);
   await openAndDraw(page);
   const firstIndexing = Number((await page.locator('#indexed').innerText()).match(/[\d.]+/)![0]);
-  await redraw(page, () => page.locator('#race').selectOption({ label: 'Orc' }));
+  await redraw(page, () => pickRace(page, 'Orc'));
+  await openDrawer(page, 'pose');
   await repose(page, () => page.locator('#presets button', { hasText: /^Cheer$/ }).click());
   await equip(page, 'head', 'Lionheart Helm');
   await page.locator('#size').selectOption('square');
   // Colour options are swatches; picking one changes the picture.
+  await openDrawer(page, 'look');
   const skin = page.locator('.swatches[data-option="Skin Color"] button');
   expect(await skin.count()).toBeGreaterThan(3);
   const before = await page.locator('#canvas').screenshot();
@@ -590,7 +636,7 @@ test('remembers the character and opens quickly on a return visit, even offline'
   const secondIndexing = Number((await page.locator('#indexed').innerText()).match(/[\d.]+/)![0]);
   console.log(`indexed in ${firstIndexing} s, then ${secondIndexing} s from the cache`);
   expect(secondIndexing).toBeLessThan(Math.max(0.3, firstIndexing / 3));
-  await expect(page.locator('#race option:checked')).toHaveText('Orc');
+  await expect(page.locator('[data-race][aria-checked="true"]')).toHaveText('Orc');
   await expect(page.locator('#presets button.on')).toHaveText('Cheer');
   await expect(page.locator('[data-slot="head"] .item-name')).toHaveText('Lionheart Helm');
   await expect(page.locator('#size option:checked')).toContainText('Square');
@@ -615,12 +661,14 @@ test('random look, random epics, and the best set for a class', async ({ page })
   const canvas = page.locator('#canvas');
 
   const plain = await canvas.screenshot();
+  await openDrawer(page, 'look');
   await redraw(page, () => page.locator('#random-look').click());
   // A random look is almost surely a different picture; the options show the new choices.
   expect((await canvas.screenshot()).equals(plain)).toBe(false);
   await redraw(page, () => page.locator('#default-look').click());
   await expect(page.locator('select[data-option="Hair Style"] option:checked')).toHaveText('Bald');
 
+  await openDrawer(page, 'gear');
   await redraw(page, () => page.locator('#random-epics').click());
   const worn = page.locator('#gear .slot-pick canvas.icon');
   expect(await worn.count()).toBeGreaterThanOrEqual(10);
@@ -630,8 +678,9 @@ test('random look, random epics, and the best set for a class', async ({ page })
   expect(await problemsShown(page)).toEqual([]);
   await canvas.screenshot({ path: 'test-results/random-epics.png' });
 
-  await page.locator('#class').selectOption({ label: 'Warrior' });
+  await pickClass(page, 'Warrior');
   await expect(page.locator('#set option')).not.toHaveCount(1);
+  await openDrawer(page, 'gear');
   await redraw(page, () => page.locator('#best-set').click());
   await expect(page.locator('[data-slot="chest"] .item-name')).toHaveText(/Battlegear|Armor|Breastplate|Dreadnaught/);
   const chest = await page.locator('[data-slot="chest"] .item-name').innerText();
@@ -642,14 +691,16 @@ test('random look, random epics, and the best set for a class', async ({ page })
   expect(await problemsShown(page)).toEqual([]);
   await canvas.screenshot({ path: 'test-results/best-set.png' });
 
-  await page.locator('#class').selectOption({ label: 'Mage' });
+  await pickClass(page, 'Mage');
   const frostfire = await page.locator('#set option', { hasText: 'Frostfire Regalia' }).getAttribute('value');
+  await openDrawer(page, 'gear');
   await redraw(page, () => page.locator('#set').selectOption(frostfire!));
   await expect(page.locator('[data-slot="chest"] .item-name')).toHaveText('Frostfire Robe');
   await expect(page.locator('[data-slot="mainHand"] .item-name')).not.toHaveText('Empty');
   expect(await problemsShown(page)).toEqual([]);
   await canvas.screenshot({ path: 'test-results/frostfire-set.png' });
 
+  await openDrawer(page, 'gear');
   await redraw(page, () => page.locator('#clear-gear').click());
   await expect(page.locator('[data-slot="chest"] .item-name')).toHaveText('Empty');
 });
@@ -660,11 +711,12 @@ const ORC_CODE = 'MOG2;Thrall-Whitemane;2;1;1;H9r4Meob;';
 test('imports a character from a pasted code and keeps the look given to her', async ({ page }) => {
   await load(page, false);
   await openAndDraw(page);
+  await openDrawer(page, 'look');
   await page.locator('#paste-toggle').click();
   await redraw(page, () => page.locator('#import-code').fill(ORC_CODE));
-  await expect(page.locator('#race option:checked')).toHaveText('Orc');
+  await expect(page.locator('[data-race][aria-checked="true"]')).toHaveText('Orc');
   await expect(page.locator('#sex button.on')).toHaveText('Female');
-  await expect(page.locator('#class option:checked')).toHaveText('Warrior');
+  await expect(page.locator('[data-class][aria-checked="true"]')).toHaveText('Warrior');
   await expect(page.locator('[data-slot="head"] .item-name')).toHaveText('Lionheart Helm');
   await expect(page.locator('[data-slot="mainHand"] .item-name')).toHaveText('Thunderfury, Blessed Blade of the Windseeker');
   await expect(page.locator('#import-note')).toContainText('2 of 2 items found');
@@ -674,6 +726,7 @@ test('imports a character from a pasted code and keeps the look given to her', a
   await page.screenshot({ path: 'test-results/page-imported.png', fullPage: true });
 
   // The look is set by eye, and a second import of the same character keeps it.
+  await openDrawer(page, 'look');
   const hair = page.locator('select[data-option="Hair Style"]');
   await redraw(page, () => hair.selectOption({ index: 3 }));
   const chosen = await hair.locator('option:checked').textContent();
@@ -681,9 +734,10 @@ test('imports a character from a pasted code and keeps the look given to her', a
   await redraw(page, () => page.locator('#import-code').fill(ORC_CODE));
   await expect(hair.locator('option:checked')).toHaveText(chosen!);
   // Choosing a race by hand means the character is no longer the imported one.
-  await redraw(page, () => page.locator('#race').selectOption({ label: 'Human' }));
+  await redraw(page, () => pickRace(page, 'Human'));
   await expect(page.locator('#imported')).toHaveValue('');
 
+  await openDrawer(page, 'look');
   await page.locator('#import-code').fill('nonsense');
   await expect(page.locator('#import-note')).toContainText('not a Mogshot code');
 });
@@ -693,6 +747,7 @@ test('lists the characters the addon captured in the game folder', async ({ page
   test.skip(saved.length === 0, 'the Mogshot addon has not saved any character here');
   await load(page, false);
   await openAndDraw(page);
+  await openDrawer(page, 'look');
   const options = page.locator('#imported option');
   expect(await options.count()).toBeGreaterThan(1);
   const first = await options.nth(1).getAttribute('value');
@@ -727,6 +782,7 @@ test('puts a backdrop behind the character, saves it on its own, and remembers i
   const pixel = (image: ReturnType<typeof decodePng>, x: number, y: number) => [...image.pixels.subarray((y * image.width + x) * 4, (y * image.width + x) * 4 + 3)];
 
   // A gradient: the picture is opaque, at the preset's size, dark red at the corners.
+  await openDrawer(page, 'scene');
   await page.locator('#backdrop-kind').selectOption('gradient:Ember');
   await expect(page.locator('#canvas')).toHaveAttribute('data-backdrop', 'ember');
   await expect(page.locator('.hint')).toContainText('part of the picture');
@@ -740,6 +796,7 @@ test('puts a backdrop behind the character, saves it on its own, and remembers i
   expect(b).toBeLessThan(50);
 
   // The backdrop alone is the same size and matches the picture where the character is not.
+  await openDrawer(page, 'export');
   const alone = await saveAs('#download-backdrop', 'backdrop-only', /^mogshot-backdrop-ember\.png$/);
   expect([alone.width, alone.height]).toEqual([1280, 720]);
   expect(opaque(alone)).toBe(true);
@@ -762,6 +819,7 @@ test('puts a backdrop behind the character, saves it on its own, and remembers i
   expect(names.length).toBeGreaterThan(40);
   const kalimdor = names.find((name) => name.startsWith('Kalimdor'));
   expect(kalimdor).toBeDefined();
+  await openDrawer(page, 'scene');
   await page.locator('#backdrop-kind').selectOption({ label: kalimdor! });
   await expect(page.locator('#canvas')).toHaveAttribute('data-backdrop', /^kalimdor/);
   await expect(page.locator('#backdrop-note')).toHaveCount(0);
@@ -774,10 +832,12 @@ test('puts a backdrop behind the character, saves it on its own, and remembers i
   const corner = pixel(withScreen, 0, 0).reduce((s, v) => s + v, 0);
   const topMiddle = pixel(withScreen, 640, 0).reduce((s, v) => s + v, 0);
   expect(corner).toBeLessThan(topMiddle);
+  await openDrawer(page, 'export');
   await saveAs('#download-backdrop', 'backdrop-screen-only', /^mogshot-backdrop-kalimdor/);
 
   // A classic 4:3 screen and the clipboard still work.
   const deadmines = names.find((name) => name.startsWith('Deadmines'));
+  await openDrawer(page, 'scene');
   await page.locator('#backdrop-kind').selectOption({ label: deadmines! });
   await expect(page.locator('#canvas')).toHaveAttribute('data-backdrop', 'deadmines');
   await page.locator('#canvas').screenshot({ path: 'test-results/backdrop-deadmines.png' });
@@ -790,6 +850,7 @@ test('puts a backdrop behind the character, saves it on its own, and remembers i
   await expect(page.locator('#blur')).toHaveValue('12');
 
   // Back to transparent.
+  await openDrawer(page, 'scene');
   await page.locator('#backdrop-kind').selectOption('none');
   await expect(page.locator('#canvas')).toHaveAttribute('data-backdrop', '');
   await expect(page.locator('#download-backdrop')).toHaveCount(0);

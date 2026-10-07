@@ -8,6 +8,15 @@
   --accent: #f0b232;
   --bad: #ff7a6b;
   --good: #7bd88f;
+  /* The character creation screen's colours: the game's title yellow, the factions, dark stone. */
+  --gold: #ffd100;
+  --gold-dark: #b8860b;
+  --alliance: #2457b5;
+  --horde: #a8141d;
+  --stone: #5c4033;
+  --stone-dark: #2b1812;
+  /* The same bookish serif the title uses (src/render/title.ts); nothing is fetched. */
+  --serif: Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
   font: 16px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
 
@@ -536,4 +545,538 @@ select {
   background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 6px;
+}
+
+/* The character creation screen. With a folder open, the Character tab fills the window. */
+
+.masthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 8px 24px;
+}
+
+.masthead .tabs {
+  margin: 0;
+  border-bottom: 0;
+}
+
+body.fullscreen main {
+  max-width: none;
+  padding: 0;
+}
+
+body.fullscreen .masthead {
+  align-items: center;
+  height: 48px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+body.fullscreen .masthead p {
+  display: none;
+}
+
+body.fullscreen .masthead h1 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+body.fullscreen .masthead .tabs button {
+  padding: 12px 18px;
+}
+
+body.fullscreen .select-panel {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+body.fullscreen .select-panel > p {
+  padding: 20px;
+}
+
+body.fullscreen .after-screen,
+body.fullscreen footer {
+  max-width: 1120px;
+  margin: 24px auto;
+  padding: 0 16px;
+}
+
+.select {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 49px);
+  /* A short window scrolls the page rather than hiding races. */
+  min-height: 600px;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 60%, #1b2230 0%, #0d0f14 65%, #07080b 100%);
+}
+
+.select-body {
+  position: relative;
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(200px, 300px) minmax(0, 1fr) minmax(200px, 300px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'crest-l top crest-r'
+    'left centre right'
+    'bottom bottom bottom';
+  min-height: 0;
+}
+
+.select-crest-left {
+  grid-area: crest-l;
+}
+
+.select-crest-right {
+  grid-area: crest-r;
+  justify-self: end;
+}
+
+.select-top {
+  grid-area: top;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+.select-left {
+  grid-area: left;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.select-right {
+  grid-area: right;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.select-bottom {
+  grid-area: bottom;
+}
+
+.select-bar {
+  flex: none;
+}
+
+/*
+ * The character in the middle: the picture's canvas sized to what room there is, the title's
+ * canvas exactly over it. The one cell is sized by the room, not by the canvas, so the canvas's
+ * percentage limits have something to measure against.
+ */
+.select .stage {
+  grid-area: centre;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 8px 8px 24px;
+  overflow: hidden;
+  background: none;
+  border-radius: 0;
+}
+
+.select .stage canvas {
+  grid-area: 1 / 1;
+  box-sizing: border-box;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+}
+
+.select .stage canvas.title-layer {
+  position: static;
+  left: auto;
+  transform: none;
+}
+
+/* Grey squares show through only where the picture is transparent. */
+.select .stage canvas.clear {
+  background: repeating-conic-gradient(#262a31 0% 25%, #1c1f25 0% 50%) 0 0 / 20px 20px;
+}
+
+.select .stage .badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 3px 10px;
+  font-size: 0.75rem;
+  color: var(--dim);
+  background: #0c0e12cc;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.select .stage .hint {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  margin: 0;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.select .stage .problems {
+  position: absolute;
+  right: 12px;
+  bottom: 4px;
+  max-width: 50%;
+  padding: 8px 12px;
+  background: #0c0e12cc;
+  border-radius: 8px;
+}
+
+.select .stage .problems p,
+.select .stage .problems ul {
+  margin: 0;
+}
+
+/* Portraits: a round picture in a metal ring, gold when chosen. */
+.portrait {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  font: 0.95rem/1.2 var(--serif);
+  color: var(--text);
+  text-shadow: 0 1px 2px #000;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.portrait.left {
+  flex-direction: row-reverse;
+}
+
+.portrait.below {
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+}
+
+.ring {
+  flex: none;
+  box-sizing: border-box;
+  width: 56px;
+  height: 56px;
+  padding: 3px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #7a7e88, #2a2d33 60%, #15171b);
+  box-shadow:
+    inset 0 0 0 1px #000a,
+    0 2px 4px #0008;
+}
+
+.ring canvas,
+.ring .initials,
+.ring svg {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: #0e1014;
+}
+
+.ring .initials {
+  display: grid;
+  place-items: center;
+  color: var(--gold);
+  font: 700 1rem var(--serif);
+}
+
+.ring .initials::before {
+  content: attr(data-initials);
+}
+
+.ring svg {
+  padding: 10px;
+  color: #c9ced6;
+}
+
+.portrait:hover .ring {
+  filter: brightness(1.25);
+}
+
+.portrait.on .ring {
+  background: conic-gradient(from 0deg, #ffe680, var(--gold-dark), var(--gold), #8a6508, #ffe680);
+  box-shadow:
+    0 0 0 1px #000,
+    0 0 16px 4px #ffd10066;
+}
+
+.portrait.on {
+  color: var(--gold);
+}
+
+.portrait.dim {
+  opacity: 0.4;
+  filter: grayscale(0.6);
+  cursor: default;
+}
+
+.portrait:focus-visible {
+  outline: none;
+}
+
+.portrait:focus-visible .ring {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
+
+/* The races, each on a faint band in its faction's colour. More than six start a second column. */
+.rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(6, auto);
+  align-content: start;
+  gap: 2px 0;
+  padding: 8px 12px;
+}
+
+.race-row {
+  position: relative;
+  display: flex;
+}
+
+.race-row::before {
+  content: '';
+  position: absolute;
+  inset: 6px -12px 6px 0;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.race-row .portrait {
+  position: relative;
+}
+
+.rail-alliance .race-row::before {
+  background: linear-gradient(90deg, #2457b580, transparent 85%);
+}
+
+.rail-horde .race-row {
+  justify-content: flex-end;
+}
+
+.rail-horde .race-row::before {
+  inset: 6px 0 6px -12px;
+  background: linear-gradient(270deg, #a8141d80, transparent 85%);
+}
+
+.rail-neutral,
+.rail-unknown {
+  grid-auto-flow: row;
+  grid-template-rows: none;
+  grid-template-columns: repeat(auto-fit, minmax(72px, auto));
+  justify-content: center;
+  padding: 0;
+}
+
+.rail-neutral .race-row::before,
+.rail-unknown .race-row::before {
+  display: none;
+}
+
+.sexes {
+  display: flex;
+  gap: 12px;
+}
+
+.sexes .portrait {
+  padding-top: 0;
+}
+
+.crest {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  font: 700 1.1rem/1 var(--serif);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold);
+  text-shadow: 0 1px 2px #000;
+}
+
+.crest svg {
+  width: 36px;
+  height: 40px;
+}
+
+.crest-alliance {
+  --crest-fill: var(--alliance);
+}
+
+.crest-horde {
+  --crest-fill: var(--horde);
+}
+
+.classes {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  padding: 6px 12px 0;
+  overflow-x: auto;
+}
+
+/* Stone buttons, as the game's. */
+.stone {
+  padding: 8px 16px;
+  font: 600 0.9rem var(--serif);
+  color: #f3e2b5;
+  background: linear-gradient(var(--stone), #3a241b 50%, var(--stone-dark));
+  border: 1px solid #0008;
+  border-radius: 6px;
+  box-shadow:
+    inset 0 1px 0 #fff2,
+    0 2px 4px #0009;
+  cursor: pointer;
+}
+
+.stone:hover {
+  filter: brightness(1.15);
+}
+
+.stone.red {
+  color: #ffe9b0;
+  background: linear-gradient(#b22b2b, #7a1414 50%, #4d0b0b);
+}
+
+.stone[aria-expanded='true'] {
+  box-shadow:
+    inset 0 0 0 2px var(--gold),
+    0 2px 4px #0009;
+}
+
+.stone:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 20px 12px;
+  background: linear-gradient(#0000, #0009);
+}
+
+.action-bar #size {
+  margin-left: auto;
+}
+
+.action-bar #export-note {
+  flex-basis: 100%;
+  min-height: 1.3em;
+  margin: 0;
+}
+
+/* The side panel, over the right of the screen; the picture does not move. */
+.drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  width: min(380px, 100%);
+  padding: 16px;
+  overflow-y: auto;
+  background: #14161aee;
+  border-left: 1px solid var(--line);
+  box-shadow: -8px 0 24px #0008;
+}
+
+.drawer[hidden],
+.drawer section[hidden] {
+  display: none;
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+#close-drawer {
+  width: 32px;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+@media (max-width: 900px) {
+  .select {
+    height: auto;
+    min-height: 0;
+  }
+
+  .select-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'top'
+      'centre'
+      'left'
+      'right'
+      'bottom';
+  }
+
+  .select .stage {
+    height: 60dvh;
+  }
+
+  .select-crest-left,
+  .select-crest-right {
+    display: none;
+  }
+
+  .select-left,
+  .select-right {
+    min-width: 0;
+    overflow: visible;
+  }
+
+  .rail {
+    grid-auto-flow: row;
+    grid-template-rows: none;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  }
+
+  .rail-horde .race-row {
+    justify-content: flex-start;
+  }
+
+  .rail-horde .race-row .portrait {
+    flex-direction: row;
+  }
+
+  .rail-horde .race-row::before {
+    inset: 6px -12px 6px 0;
+    background: linear-gradient(90deg, #a8141d80, transparent 85%);
+  }
+
+  .classes {
+    justify-content: flex-start;
+  }
+
+  .drawer {
+    position: fixed;
+    inset: 49px 0 0 0;
+    width: auto;
+  }
 }

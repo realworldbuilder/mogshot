@@ -1,51 +1,34 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { type ClassInfo, type ItemSetInfo, type ItemSummary, type Slot, SLOTS } from '../character/equipment';
+import { type ItemSetInfo, type ItemSummary, type Slot, SLOTS } from '../character/equipment';
+import type { Image } from '../formats/blp';
 import type { DataClient } from '../worker/client';
 import { messageOf } from './App';
+import { Pixels } from './Pixels';
 
 /** The game's item quality colours, poor to heirloom. */
 const QUALITY_COLORS = ['#9d9d9d', '#ffffff', '#1eff00', '#0070dd', '#a335ee', '#ff8000', '#e6cc80', '#00ccff'];
 
-const icons = new Map<number, Promise<ImageData | undefined>>();
+const icons = new Map<number, Promise<Image | undefined>>();
 
 /** An item's icon, read from the game files the first time it is shown. */
 function ItemIcon({ data, fileId }: { data: DataClient; fileId: number }) {
-  const canvas = useRef<HTMLCanvasElement>(null);
+  const [image, setImage] = useState<Image>();
   useEffect(() => {
     let current = true;
-    if (!icons.has(fileId)) {
-      icons.set(
-        fileId,
-        data
-          .icon(fileId)
-          .then((image) => image && new ImageData(new Uint8ClampedArray(image.pixels), image.width, image.height))
-          .catch(() => undefined),
-      );
-    }
-    void icons.get(fileId)!.then((image) => {
-      const target = canvas.current;
-      if (!current || !target) return;
-      const context = target.getContext('2d')!;
-      context.clearRect(0, 0, target.width, target.height);
-      if (!image) return;
-      target.width = image.width;
-      target.height = image.height;
-      context.putImageData(image, 0, 0);
-    });
+    if (!icons.has(fileId)) icons.set(fileId, data.icon(fileId).catch(() => undefined));
+    setImage(undefined);
+    void icons.get(fileId)!.then((read) => current && setImage(read));
     return () => {
       current = false;
     };
   }, [data, fileId]);
-  return <canvas class="icon" ref={canvas} width={64} height={64} />;
+  return <Pixels class="icon" image={image} />;
 }
 
 interface Props {
   data: DataClient;
-  /** Race of the character, which decides the classes (and so the sets) on offer. */
-  raceId: number;
-  /** The character's class, or undefined until the race's classes are known. */
+  /** The character's class, which decides the sets on offer; undefined until the classes are known. */
   classId: number | undefined;
-  onClass: (classId: number) => void;
   gear: ReadonlyMap<Slot, ItemSummary>;
   onChange: (slot: Slot, item: ItemSummary | undefined) => void;
   /** Replace everything worn at once. */
@@ -55,34 +38,15 @@ interface Props {
 const EPIC = 4;
 
 /** One row per visible slot, with shortcuts above. Clicking a row opens a search of the items that fit it. */
-export function GearPanel({ data, raceId, classId, onClass, gear, onChange, onOutfit }: Props) {
+export function GearPanel({ data, classId, gear, onChange, onOutfit }: Props) {
   const [open, setOpen] = useState<Slot>();
   const [query, setQuery] = useState('');
   const [found, setFound] = useState<{ items: ItemSummary[]; total: number }>();
   const [error, setError] = useState<string>();
   const request = useRef(0);
-  const [classes, setClasses] = useState<ClassInfo[]>([]);
   const [sets, setSets] = useState<ItemSetInfo[]>([]);
-  const chosenClass = useRef(classId);
-  chosenClass.current = classId;
 
-  // The classes this race can be, then the sets the chosen class can wear. A class the race
-  // cannot be becomes the first it can.
-  useEffect(() => {
-    let current = true;
-    data
-      .classes(raceId)
-      .then((list) => {
-        if (!current) return;
-        setClasses(list);
-        const first = list[0];
-        if (first && !list.some((c) => c.id === chosenClass.current)) onClass(first.id);
-      })
-      .catch((cause) => setError(messageOf(cause)));
-    return () => {
-      current = false;
-    };
-  }, [data, raceId]);
+  // The sets the chosen class can wear.
   useEffect(() => {
     if (classId === undefined) return;
     let current = true;
@@ -133,11 +97,6 @@ export function GearPanel({ data, raceId, classId, onClass, gear, onChange, onOu
         </button>
       </div>
       <div class="shortcuts">
-        <select id="class" aria-label="Class" value={classId} onChange={(event) => onClass(Number(event.currentTarget.value))}>
-          {classes.map((c) => (
-            <option value={c.id}>{c.name}</option>
-          ))}
-        </select>
         <select
           id="set"
           aria-label="Set"

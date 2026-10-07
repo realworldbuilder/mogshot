@@ -55,6 +55,13 @@ export function App() {
     return () => window.removeEventListener('hashchange', follow);
   }, []);
 
+  // With a folder open, the Character tab fills the window like the game's character creation screen.
+  const select = tab === 'character' && phase.kind === 'ready';
+  useEffect(() => {
+    document.body.classList.toggle('fullscreen', select);
+    return () => document.body.classList.remove('fullscreen');
+  }, [select]);
+
   // What goes behind the character: set on either tab, kept for the next visit.
   const [backdrop, setBackdrop] = useState<Backdrop>(rememberedBackdrop);
   useEffect(() => rememberBackdrop(backdrop), [backdrop]);
@@ -160,19 +167,23 @@ export function App() {
 
   return (
     <>
-      <h1>Mogshot</h1>
-      <p class="dim">
-        Transparent PNG cutouts of World of Warcraft characters, made from your own game files in your browser.
-      </p>
+      <header class="masthead">
+        <div>
+          <h1>Mogshot</h1>
+          <p class="dim">
+            Transparent PNG cutouts of World of Warcraft characters, made from your own game files in your browser.
+          </p>
+        </div>
 
-      <nav class="tabs" role="tablist">
-        <button role="tab" id="tab-character" aria-selected={tab === 'character'} class={tab === 'character' ? 'on' : ''} onClick={() => showTab('character')}>
-          Character
-        </button>
-        <button role="tab" id="tab-backdrop" aria-selected={tab === 'backdrop'} class={tab === 'backdrop' ? 'on' : ''} onClick={() => showTab('backdrop')}>
-          Backdrop
-        </button>
-      </nav>
+        <nav class="tabs" role="tablist">
+          <button role="tab" id="tab-character" aria-selected={tab === 'character'} class={tab === 'character' ? 'on' : ''} onClick={() => showTab('character')}>
+            Character
+          </button>
+          <button role="tab" id="tab-backdrop" aria-selected={tab === 'backdrop'} class={tab === 'backdrop' ? 'on' : ''} onClick={() => showTab('backdrop')}>
+            Backdrop
+          </button>
+        </nav>
+      </header>
 
       {tab === 'backdrop' && (
         <BackdropPanel
@@ -250,12 +261,14 @@ export function App() {
             screens={screens}
             loadScreen={loadScreen!}
           />
-          <FolderDetails
-            opened={phase.opened}
-            dragging={dragging}
-            chooser={chooser('Use another folder…')}
-            onProduct={(product) => void openFolder(phase.files, product)}
-          />
+          <div class="after-screen">
+            <FolderDetails
+              opened={phase.opened}
+              dragging={dragging}
+              chooser={chooser('Use another folder…')}
+              onProduct={(product) => void openFolder(phase.files, product)}
+            />
+          </div>
         </>
       )}
       </div>

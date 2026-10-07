@@ -5,19 +5,21 @@ import { CascStorage, InstallError, listProducts } from '../casc/storage';
 import { Appearance } from '../character/appearance';
 import { type LoadingScreen, loadLoadingScreens } from '../character/backdrops';
 import { Equipment } from '../character/equipment';
+import { loadPortraits } from '../character/portraits';
 import { buildCharacterScene, type CharacterRig } from '../character/scene';
 import { Database } from '../db2/database';
 import { Definitions } from '../db2/definitions';
-import { decodeBlp } from '../formats/blp';
+import { decodeBlp, type Image } from '../formats/blp';
 import { resolveImport } from '../import/resolve';
 import { FileListSource } from '../io/file-list-source';
-import type { CharacterResult, IconResult, ItemSearchResult, OpenResult, Request, Response } from './api';
+import type { CharacterResult, IconResult, ItemSearchResult, OpenResult, Portraits, Request, Response } from './api';
 
 let storage: CascStorage | undefined;
 let database: Database | undefined;
 let appearance: Promise<Appearance> | undefined;
 let equipment: Promise<Equipment> | undefined;
 let screens: Promise<LoadingScreen[]> | undefined;
+let portraits: Promise<Portraits> | undefined;
 // The character last built, kept so it can be posed again without rebuilding.
 let rig: CharacterRig | undefined;
 
@@ -70,6 +72,7 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       appearance = undefined;
       equipment = undefined;
       screens = undefined;
+      portraits = undefined;
       rig = undefined;
       const value: OpenResult = {
         info: storage.info,
@@ -113,8 +116,26 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       const value: ItemSearchResult = (await loadEquipment()).search(request.slot, request.query);
       return { value };
     }
-    case 'classes':
-      return { value: (await loadEquipment()).classes(request.raceId) };
+    case 'classList':
+      return { value: (await loadAppearance()).classes };
+    case 'portraits': {
+      if (!storage) throw new Error('No folder is open');
+      const files = storage;
+      portraits ??= loadAppearance().then((looks) =>
+        loadPortraits(database!, (fileId) => files.readFile(fileId).then((file) => file?.data), looks.races, looks.classes),
+      );
+      let value: Portraits;
+      try {
+        value = await portraits;
+      } catch (error) {
+        portraits = undefined;
+        throw error;
+      }
+      // The pictures are copied out: the worker keeps its own for the next request.
+      const copy = (images: Record<string, Image>) => Object.fromEntries(Object.entries(images).map(([key, image]) => [key, { ...image, pixels: image.pixels.slice() }]));
+      const sent = { races: copy(value.races), classes: copy(value.classes), problems: value.problems };
+      return { value: sent, transfer: [...Object.values(sent.races), ...Object.values(sent.classes)].map((image) => image.pixels.buffer) };
+    }
     case 'sets':
       return { value: (await loadEquipment()).sets(request.classId) };
     case 'randomOutfit':

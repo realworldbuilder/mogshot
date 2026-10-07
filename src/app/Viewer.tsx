@@ -10,13 +10,19 @@ import { CLIP_FPS, CLIP_FORMATS, type ClipFormat, clipSize, clipTimes, encodeCli
 import { encodePng, unpremultiply } from '../render/export';
 import { type Camera, CharacterRenderer, DEFAULT_CAMERA } from '../render/renderer';
 import { composeTitle, drawTitle, hasTitle, layTitle, type Title } from '../render/title';
-import type { LoadingScreen, Race } from '../worker/api';
+import type { ClassEntry, LoadingScreen, Portraits, Race } from '../worker/api';
 import type { DataClient } from '../worker/client';
 import { messageOf } from './App';
 import { BackdropControls, backdropName, compose, drawable, type LoadScreen, screenProblem, useScreen } from './BackdropControls';
+import { ClassBar } from './ClassBar';
+import { Crest } from './Crest';
+import { Drawer, type DrawerName, DRAWERS } from './Drawer';
 import { GearPanel } from './GearPanel';
 import { ImportPanel } from './ImportPanel';
 import { type PlaceChoice, PlaceControls, recallPlace, rememberPlace } from './PlaceControls';
+import { RaceRail } from './RaceRail';
+import { SelectScreen } from './SelectScreen';
+import { SexToggle } from './SexToggle';
 import { recallTitle, rememberTitle, TitleControls } from './TitleControls';
 import { downloadFile, downloadPng, previewSize, savedNote, type Size, SIZES } from './sizes';
 
@@ -131,6 +137,12 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
   const [fov, setFov] = useState(30);
   const [size, setSize] = useState<Size>(SIZES.find((s) => s.id === previous.current?.size) ?? SIZES[0]);
   const [racesError, setRacesError] = useState<string>();
+  // Every class in the game's order, and the race and class pictures from the game's interface atlas.
+  const [classes, setClasses] = useState<ClassEntry[]>([]);
+  const [classesError, setClassesError] = useState<string>();
+  const [portraits, setPortraits] = useState<Portraits>();
+  // The side panel open over the screen, if one is.
+  const [open, setOpen] = useState<DrawerName>();
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<string>();
   const [exportNote, setExportNote] = useState<{ text: string; bad: boolean }>();
@@ -171,6 +183,29 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
       .catch((cause) => setRacesError(messageOf(cause)));
   };
   useEffect(loadRaces, [data]);
+  useEffect(() => {
+    setClassesError(undefined);
+    data
+      .classList()
+      .then(setClasses)
+      .catch((cause) => setClassesError(`The classes could not be listed: ${messageOf(cause)}`));
+    data
+      .portraits()
+      .then(setPortraits)
+      .catch((cause) =>
+        setPortraits({ races: {}, classes: {}, problems: [`The game's race and class pictures could not be read: ${messageOf(cause)}. Letters are shown instead.`] }),
+      );
+  }, [data]);
+
+  // A class the race cannot be becomes the first it can.
+  useEffect(() => {
+    if (!character || classes.length === 0) return;
+    const allowed = classes.filter((c) => c.races.includes(character.raceId));
+    if (!allowed.some((c) => c.id === classId)) {
+      const first = allowed[0];
+      if (first) setClassId(first.id);
+    }
+  }, [classes, character?.raceId]);
 
   // Keep what is on screen for the next visit.
   useEffect(() => {
@@ -353,6 +388,18 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
   }, [races, character]);
 
   const race = races?.find((r) => r.id === character?.raceId);
+
+  const pickRace = (next: Race) => {
+    if (!character || next.id === character.raceId) return;
+    const sex = next.sexes.includes(character.sex) ? character.sex : (next.sexes[0] ?? 0);
+    setCharacter({ raceId: next.id, sex, choices: [] });
+    setImportedKey(undefined);
+  };
+  const pickSex = (sex: number) => {
+    if (!character || sex === character.sex) return;
+    setCharacter({ raceId: character.raceId, sex, choices: [] });
+    setImportedKey(undefined);
+  };
 
   const choose = (optionId: number, choiceId: number) => {
     if (!character || !shown) return;
@@ -562,8 +609,250 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
   // Animations in name order; the variations of one animation are numbered.
   const animations = [...(shown?.animations ?? [])].sort((a, b) => a.name.localeCompare(b.name) || a.variation - b.variation);
 
+  const transparent = !hasBackdrop && !inPlace;
+
+  /** The appearance: your own characters, then each option the character creation screen offers. */
+  const look = character && (
+    <>
+      <ImportPanel data={data} records={records} recordsError={recordsError} selectedKey={importedKey} onImport={showImported} />
+      <div class="shortcuts">
+        <button
+          class="plain"
+          id="random-look"
+          disabled={!shown}
+          onClick={() => {
+            if (!shown) return;
+            // A random available choice for every option the game offers.
+            const choices: [number, number][] = [];
+            for (const option of shown.options) {
+              if (option.hidden) continue;
+              const pool = option.choices.filter((choice) => choice.available);
+              const pick = pool[Math.floor(Math.random() * pool.length)];
+              if (pick) choices.push([option.id, pick.id]);
+            }
+            setCharacter({ ...character, choices });
+          }}
+        >
+          Random look
+        </button>
+        <button
+          class="plain"
+          id="default-look"
+          disabled={!shown || character.choices.length === 0}
+          onClick={() => setCharacter({ ...character, choices: [] })}
+        >
+          Default look
+        </button>
+      </div>
+
+      {shown?.options
+        .filter((option) => !option.hidden)
+        .map((option) => {
+          const current = shown.choices.get(option.id);
+          // Choices only non-player characters or special classes can use are left out.
+          const choices = option.choices.filter((choice) => choice.available || choice.id === current);
+          let unnamed = 0;
+          // Colour options show their colours; everything else is a list.
+          if (choices.length > 0 && choices.every((choice) => choice.swatches.length > 0)) {
+            return (
+              <div class="field" key={option.id}>
+                <span>{option.name}</span>
+                <div class="swatches" data-option={option.name} role="radiogroup">
+                  {choices.map((choice, i) => (
+                    <button
+                      role="radio"
+                      aria-checked={choice.id === current}
+                      class={choice.id === current ? 'on' : ''}
+                      title={choice.name || `${option.name} ${i + 1}`}
+                      style={{
+                        background:
+                          choice.swatches.length > 1
+                            ? `linear-gradient(135deg, ${choice.swatches[0]} 50%, ${choice.swatches[1]} 50%)`
+                            : choice.swatches[0],
+                      }}
+                      onClick={() => choose(option.id, choice.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          }
+          return (
+            <label class="field" key={option.id}>
+              <span>{option.name}</span>
+              <select data-option={option.name} value={current} onChange={(event) => choose(option.id, Number(event.currentTarget.value))}>
+                {choices.map((choice) => (
+                  <option value={choice.id}>{choice.name || String(++unnamed)}</option>
+                ))}
+              </select>
+            </label>
+          );
+        })}
+      {shown && (
+        <p class="dim small" id="character-note">
+          Built in {(shown.ms / 1000).toFixed(1)} s.
+        </p>
+      )}
+    </>
+  );
+
+  /** The pose presets, the animation and its moment, and the lens. */
+  const posePanel = (
+    <div class="pose" id="pose">
+      <div class="presets" id="presets">
+        {shown?.presets.map((preset) => (
+          <button key={preset.name} class={pose?.preset === preset.name ? 'on' : ''} onClick={() => poseAt(preset.sequence, preset.time, { preset: preset.name })}>
+            {preset.name}
+          </button>
+        ))}
+      </div>
+      <div class="scrub">
+        <button class={playing ? 'plain on' : 'plain'} id="play" aria-pressed={playing} disabled={!animation || exporting} onClick={() => setPlaying(!playing)}>
+          {playing ? 'Pause' : 'Play'}
+        </button>
+        <select id="animation" aria-label="Animation" value={pose?.sequence} onChange={(event) => scrubTo(Number(event.currentTarget.value), 0)}>
+          {animations.map((a) => (
+            <option value={a.sequence}>
+              {a.name}
+              {a.variation > 0 ? ` (${a.variation + 1})` : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div class="scrub">
+        <input
+          id="time"
+          type="range"
+          aria-label="Moment in the animation"
+          min={0}
+          max={pose?.duration ?? 0}
+          step={1}
+          value={pose?.time ?? 0}
+          disabled={!animation}
+          onInput={(event) => pose && scrubTo(pose.sequence, Number(event.currentTarget.value))}
+        />
+        <span class="dim small" id="time-label">
+          {pose ? `${(pose.time / 1000).toFixed(2)} of ${(pose.duration / 1000).toFixed(2)} s` : ''}
+        </span>
+      </div>
+      <div class="scrub">
+        <label class="small" for="fov">
+          Lens
+        </label>
+        <input
+          id="fov"
+          type="range"
+          min={10}
+          max={70}
+          step={1}
+          value={fov}
+          onInput={(event) => {
+            const degrees = Number(event.currentTarget.value);
+            setFov(degrees);
+            camera.current.fov = (degrees * Math.PI) / 180;
+            redraw();
+          }}
+        />
+        <span class="dim small">{fov}° {fov <= 20 ? '(flat)' : fov >= 50 ? '(wide)' : ''}</span>
+        <button
+          class="plain"
+          id="reset-view"
+          onClick={() => {
+            camera.current = { ...DEFAULT_CAMERA };
+            setFov(30);
+            redraw();
+          }}
+        >
+          Reset view
+        </button>
+      </div>
+      <p class="dim small">Drag the picture to turn, shift-drag to slide, scroll to zoom.</p>
+    </div>
+  );
+
+  /** Where the character stands, the words over it, and what is behind it. */
+  const scene = (
+    <>
+      <PlaceControls place={place} onChange={setPlace} busy={placed.state === 'reading'} problem={placed.problem} />
+      <TitleControls title={title} onChange={setTitle} cropped={cropped} />
+      {active && <BackdropControls backdrop={backdrop} onChange={onBackdrop} screens={screens} problem={screenProblem(backdrop, screen, screens)} />}
+    </>
+  );
+
+  /** The clip and the backdrop by itself; the picture is saved from the bar at the bottom. */
+  const exportPanel = (
+    <>
+      <div class="actions">
+        <select id="clip-format" aria-label="Clip format" value={clipFormat} onChange={(event) => setClipFormat(event.currentTarget.value as ClipFormat)}>
+          {(Object.keys(CLIP_FORMATS) as ClipFormat[]).map((format) => (
+            <option value={format}>{CLIP_FORMATS[format].name}</option>
+          ))}
+        </select>
+        <select id="clip-length" aria-label="Clip length" value={clipLength} onChange={(event) => setClipLength(Number(event.currentTarget.value))}>
+          <option value={0}>One loop</option>
+          {[5, 10, 15, 30].map((seconds) => (
+            <option value={seconds}>About {seconds} s</option>
+          ))}
+        </select>
+        <button class="plain" id="download-clip" disabled={exporting || !shown || !animation} onClick={saveClip}>
+          Download clip
+        </button>
+      </div>
+      <p class="dim small">
+        {animation
+          ? `${animation.name}, ${((clipLength > 0 ? loopedTimes(animation.duration, 1000, clipLength).length : animation.duration) / 1000).toFixed(1)} s, looping.`
+          : 'Pick an animation under Pose to film it.'}
+      </p>
+      {hasBackdrop && (
+        <div class="actions">
+          <button class="plain" id="download-backdrop" disabled={exporting} onClick={saveBackdrop}>
+            Backdrop only
+          </button>
+          <span class="dim small">The backdrop by itself, to layer under a transparent character in Canva.</span>
+        </div>
+      )}
+      <p class="dim small">
+        {hasBackdrop
+          ? 'A PNG with the backdrop behind the character.'
+          : 'A transparent PNG. Copy puts it on the clipboard, ready to paste into Canva or an editor.'}
+      </p>
+    </>
+  );
+
+  const bar = (
+    <div class="action-bar">
+      {DRAWERS.map((d) => (
+        <button
+          key={d.id}
+          type="button"
+          class="stone"
+          id={`open-${d.id}`}
+          aria-expanded={open === d.id}
+          aria-controls={`drawer-${d.id}`}
+          onClick={() => setOpen(open === d.id ? undefined : d.id)}
+        >
+          {d.name}
+        </button>
+      ))}
+      <select id="size" aria-label="Picture size" value={size.id} onChange={(event) => setSize(SIZES.find((s) => s.id === event.currentTarget.value) ?? SIZES[0])}>
+        {SIZES.map((s) => (
+          <option value={s.id}>{s.name}</option>
+        ))}
+      </select>
+      <button class="stone" id="copy" disabled={exporting || !shown} onClick={() => save('copy')}>
+        Copy
+      </button>
+      <button class="stone red" id="download" disabled={exporting || !shown} onClick={() => save('download')}>
+        Download PNG
+      </button>
+      <p class={`${exportNote?.bad ? 'bad' : 'dim'} small`} id="export-note">
+        {exportNote?.text ?? ''}
+      </p>
+    </div>
+  );
+
   return (
-    <section class="panel" id="character">
+    <section class="panel select-panel" id="character">
       {(error ?? racesError) && (
         <p class="bad" id="character-error">
           The character could not be drawn: {error ?? racesError}{' '}
@@ -574,328 +863,95 @@ export function Viewer({ data, records, recordsError, active, backdrop, onBackdr
       )}
       {!races && !racesError && <p class="dim">Reading the game database…</p>}
       {races && character && (
-        <div class="viewer">
-          <div>
+        <SelectScreen
+          crestLeft={<Crest faction="alliance" />}
+          crestRight={<Crest faction="horde" />}
+          top={
+            <>
+              <SexToggle sexes={race?.sexes ?? []} sex={character.sex} onPick={pickSex} />
+              {races.some((r) => r.faction === 'neutral' || r.faction === 'unknown') && (
+                <RaceRail
+                  faction={races.some((r) => r.faction === 'neutral') ? 'neutral' : 'unknown'}
+                  races={races.filter((r) => r.faction === 'neutral' || r.faction === 'unknown')}
+                  raceId={character.raceId}
+                  sex={character.sex}
+                  portraits={portraits}
+                  onPick={pickRace}
+                />
+              )}
+              {(portraits?.problems.length ?? 0) > 0 && (
+                <p class="dim small" id="portrait-note">
+                  {portraits!.problems.join(' ')}
+                </p>
+              )}
+              {classesError && <p class="bad small">{classesError}</p>}
+            </>
+          }
+          left={<RaceRail faction="alliance" races={races.filter((r) => r.faction === 'alliance')} raceId={character.raceId} sex={character.sex} portraits={portraits} onPick={pickRace} />}
+          right={<RaceRail faction="horde" races={races.filter((r) => r.faction === 'horde')} raceId={character.raceId} sex={character.sex} portraits={portraits} onPick={pickRace} />}
+          centre={
             <div class="stage">
               <canvas
                 id="canvas"
                 ref={canvas}
                 width={preview.width}
                 height={preview.height}
-                class={building ? 'building' : ''}
+                class={`${building ? 'building' : ''}${transparent ? ' clear' : ''}`}
                 data-drawn={shown?.drawn ?? 0}
                 data-pose={pose ? `${pose.sequence}:${pose.time}` : ''}
                 data-backdrop={hasBackdrop ? backdropName(backdrop, screens) : ''}
                 data-place={placed.state}
               />
               {hasTitle(title) && <canvas id="title-layer" class="title-layer" ref={titleCanvas} width={preview.width} height={preview.height} />}
-            </div>
-            <p class="dim small hint">
-              Drag to turn, shift-drag to slide, scroll to zoom.{' '}
-              {inPlace ? 'The place is part of the picture.' : hasBackdrop ? 'The backdrop is part of the picture.' : 'The grey squares are transparency.'}
-            </p>
-
-            <div class="pose" id="pose">
-              <div class="presets" id="presets">
-                {shown?.presets.map((preset) => (
-                  <button
-                    key={preset.name}
-                    class={pose?.preset === preset.name ? 'on' : ''}
-                    onClick={() => poseAt(preset.sequence, preset.time, { preset: preset.name })}
-                  >
-                    {preset.name}
-                  </button>
-                ))}
-              </div>
-              <div class="scrub">
-                <button
-                  class={playing ? 'plain on' : 'plain'}
-                  id="play"
-                  aria-pressed={playing}
-                  disabled={!animation || exporting}
-                  onClick={() => setPlaying(!playing)}
-                >
-                  {playing ? 'Pause' : 'Play'}
-                </button>
-                <select
-                  id="animation"
-                  aria-label="Animation"
-                  value={pose?.sequence}
-                  onChange={(event) => scrubTo(Number(event.currentTarget.value), 0)}
-                >
-                  {animations.map((a) => (
-                    <option value={a.sequence}>
-                      {a.name}
-                      {a.variation > 0 ? ` (${a.variation + 1})` : ''}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  id="time"
-                  type="range"
-                  aria-label="Moment in the animation"
-                  min={0}
-                  max={pose?.duration ?? 0}
-                  step={1}
-                  value={pose?.time ?? 0}
-                  disabled={!animation}
-                  onInput={(event) => pose && scrubTo(pose.sequence, Number(event.currentTarget.value))}
-                />
-                <span class="dim small" id="time-label">
-                  {pose ? `${(pose.time / 1000).toFixed(2)} of ${(pose.duration / 1000).toFixed(2)} s` : ''}
+              {transparent && (
+                <span class="badge" id="transparent-badge">
+                  Transparent PNG
                 </span>
-              </div>
-              <div class="scrub">
-                <label class="small" for="fov">
-                  Lens
-                </label>
-                <input
-                  id="fov"
-                  type="range"
-                  min={10}
-                  max={70}
-                  step={1}
-                  value={fov}
-                  onInput={(event) => {
-                    const degrees = Number(event.currentTarget.value);
-                    setFov(degrees);
-                    camera.current.fov = (degrees * Math.PI) / 180;
-                    redraw();
-                  }}
-                />
-                <span class="dim small">{fov}° {fov <= 20 ? '(flat)' : fov >= 50 ? '(wide)' : ''}</span>
-                <button
-                  class="plain"
-                  id="reset-view"
-                  onClick={() => {
-                    camera.current = { ...DEFAULT_CAMERA };
-                    setFov(30);
-                    redraw();
-                  }}
-                >
-                  Reset view
-                </button>
-              </div>
-            </div>
-
-            <PlaceControls place={place} onChange={setPlace} busy={placed.state === 'reading'} problem={placed.problem} />
-
-            <TitleControls title={title} onChange={setTitle} cropped={cropped} />
-
-            {active && (
-              <BackdropControls backdrop={backdrop} onChange={onBackdrop} screens={screens} problem={screenProblem(backdrop, screen, screens)} />
-            )}
-
-            <div class="actions">
-              <select
-                id="size"
-                aria-label="Picture size"
-                value={size.id}
-                onChange={(event) => setSize(SIZES.find((s) => s.id === event.currentTarget.value) ?? SIZES[0])}
-              >
-                {SIZES.map((s) => (
-                  <option value={s.id}>{s.name}</option>
-                ))}
-              </select>
-              <button class="primary" id="download" disabled={exporting || !shown} onClick={() => save('download')}>
-                Download PNG
-              </button>
-              <button class="plain" id="copy" disabled={exporting || !shown} onClick={() => save('copy')}>
-                Copy
-              </button>
-              {hasBackdrop && (
-                <button class="plain" id="download-backdrop" disabled={exporting} onClick={saveBackdrop}>
-                  Backdrop only
-                </button>
+              )}
+              <p class="dim small hint">
+                {inPlace ? 'The place is part of the picture.' : hasBackdrop ? 'The backdrop is part of the picture.' : 'The grey squares are transparency.'}
+              </p>
+              {shown && shown.problems.length > 0 && (
+                <div id="character-problems" class="problems">
+                  <p class="bad small">This picture is missing something. A download will be missing it too:</p>
+                  <ul class="small">
+                    {shown.problems.map((problem) => (
+                      <li>{problem}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </div>
-            <div class="actions">
-              <select
-                id="clip-format"
-                aria-label="Clip format"
-                value={clipFormat}
-                onChange={(event) => setClipFormat(event.currentTarget.value as ClipFormat)}
-              >
-                {(Object.keys(CLIP_FORMATS) as ClipFormat[]).map((format) => (
-                  <option value={format}>{CLIP_FORMATS[format].name}</option>
-                ))}
-              </select>
-              <select
-                id="clip-length"
-                aria-label="Clip length"
-                value={clipLength}
-                onChange={(event) => setClipLength(Number(event.currentTarget.value))}
-              >
-                <option value={0}>One loop</option>
-                {[5, 10, 15, 30].map((seconds) => (
-                  <option value={seconds}>About {seconds} s</option>
-                ))}
-              </select>
-              <button class="plain" id="download-clip" disabled={exporting || !shown || !animation} onClick={saveClip}>
-                Download clip
-              </button>
-              <span class="dim small">
-                {animation
-                  ? `${animation.name}, ${((clipLength > 0 ? loopedTimes(animation.duration, 1000, clipLength).length : animation.duration) / 1000).toFixed(1)} s, looping`
-                  : ''}
-              </span>
-            </div>
-            <p class={`${exportNote?.bad ? 'bad' : 'dim'} small`} id="export-note">
-              {exportNote?.text ??
-                (hasBackdrop
-                  ? 'A PNG with the backdrop behind the character. Backdrop only saves the backdrop by itself, to layer under a transparent character in Canva.'
-                  : 'A transparent PNG. Copy puts it on the clipboard, ready to paste into Canva or an editor.')}
-            </p>
-            {shown && shown.problems.length > 0 && (
-              <div id="character-problems">
-                <p class="bad small">This picture is missing something. A download will be missing it too:</p>
-                <ul class="small">
-                  {shown.problems.map((problem) => (
-                    <li>{problem}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-
-          <div class="controls">
-            <span class="column-title">Character</span>
-            <ImportPanel data={data} records={records} recordsError={recordsError} selectedKey={importedKey} onImport={showImported} />
-            <label class="field">
-              <span>Race</span>
-              <select
-                id="race"
-                value={character.raceId}
-                onChange={(event) => {
-                  const next = races.find((r) => r.id === Number(event.currentTarget.value))!;
-                  const sex = next.sexes.includes(character.sex) ? character.sex : (next.sexes[0] ?? 0);
-                  setCharacter({ raceId: next.id, sex, choices: [] });
-                  setImportedKey(undefined);
-                }}
-              >
-                {races.map((r) => (
-                  <option value={r.id}>{r.name}</option>
-                ))}
-              </select>
-            </label>
-            <div class="field">
-              <span>Sex</span>
-              <div class="segments" id="sex">
-                {(race?.sexes ?? []).map((sex) => (
-                  <button
-                    class={sex === character.sex ? 'on' : ''}
-                    onClick={() => {
-                      setCharacter({ raceId: character.raceId, sex, choices: [] });
-                      setImportedKey(undefined);
+          }
+          bottom={<ClassBar classes={classes} raceId={character.raceId} classId={classId} portraits={portraits} onPick={setClassId} />}
+          bar={bar}
+          drawer={
+            <Drawer
+              open={open}
+              onClose={() => setOpen(undefined)}
+              panels={{
+                look,
+                gear: (
+                  <GearPanel
+                    data={data}
+                    classId={classId}
+                    gear={gear}
+                    onChange={(slot, item) => {
+                      const next = new Map(gear);
+                      if (item) next.set(slot, item);
+                      else next.delete(slot);
+                      setGear(next);
                     }}
-                  >
-                    {SEX_NAMES[sex]}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div class="shortcuts">
-              <button
-                class="plain"
-                id="random-look"
-                disabled={!shown}
-                onClick={() => {
-                  if (!shown) return;
-                  // A random available choice for every option the game offers.
-                  const choices: [number, number][] = [];
-                  for (const option of shown.options) {
-                    if (option.hidden) continue;
-                    const pool = option.choices.filter((choice) => choice.available);
-                    const pick = pool[Math.floor(Math.random() * pool.length)];
-                    if (pick) choices.push([option.id, pick.id]);
-                  }
-                  setCharacter({ ...character, choices });
-                }}
-              >
-                Random look
-              </button>
-              <button
-                class="plain"
-                id="default-look"
-                disabled={!shown || character.choices.length === 0}
-                onClick={() => setCharacter({ ...character, choices: [] })}
-              >
-                Default look
-              </button>
-            </div>
-
-            {shown?.options
-              .filter((option) => !option.hidden)
-              .map((option) => {
-                const current = shown.choices.get(option.id);
-                // Choices only non-player characters or special classes can use are left out.
-                const choices = option.choices.filter((choice) => choice.available || choice.id === current);
-                let unnamed = 0;
-                // Colour options show their colours; everything else is a list.
-                if (choices.length > 0 && choices.every((choice) => choice.swatches.length > 0)) {
-                  return (
-                    <div class="field" key={option.id}>
-                      <span>{option.name}</span>
-                      <div class="swatches" data-option={option.name} role="radiogroup">
-                        {choices.map((choice, i) => (
-                          <button
-                            role="radio"
-                            aria-checked={choice.id === current}
-                            class={choice.id === current ? 'on' : ''}
-                            title={choice.name || `${option.name} ${i + 1}`}
-                            style={{
-                              background:
-                                choice.swatches.length > 1
-                                  ? `linear-gradient(135deg, ${choice.swatches[0]} 50%, ${choice.swatches[1]} 50%)`
-                                  : choice.swatches[0],
-                            }}
-                            onClick={() => choose(option.id, choice.id)}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                }
-                return (
-                  <label class="field" key={option.id}>
-                    <span>{option.name}</span>
-                    <select
-                      data-option={option.name}
-                      value={current}
-                      onChange={(event) => choose(option.id, Number(event.currentTarget.value))}
-                    >
-                      {choices.map((choice) => (
-                        <option value={choice.id}>{choice.name || String(++unnamed)}</option>
-                      ))}
-                    </select>
-                  </label>
-                );
-              })}
-            {shown && (
-              <p class="dim small" id="character-note">
-                Built in {(shown.ms / 1000).toFixed(1)} s.
-              </p>
-            )}
-          </div>
-
-          <div class="controls">
-            <span class="column-title">Gear</span>
-            <GearPanel
-              data={data}
-              raceId={character.raceId}
-              classId={classId}
-              onClass={setClassId}
-              gear={gear}
-              onChange={(slot, item) => {
-                const next = new Map(gear);
-                if (item) next.set(slot, item);
-                else next.delete(slot);
-                setGear(next);
+                    onOutfit={(outfit) => setGear(new Map(outfit))}
+                  />
+                ),
+                pose: posePanel,
+                scene,
+                export: exportPanel,
               }}
-              onOutfit={(outfit) => setGear(new Map(outfit))}
             />
-          </div>
-        </div>
+          }
+        />
       )}
     </section>
   );

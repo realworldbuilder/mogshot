@@ -1,7 +1,8 @@
 import type { BuildInfoEntry } from '../casc/build-info';
 import type { FileIndexStats } from '../casc/file-index';
 import type { OpenStage, StorageInfo } from '../casc/storage';
-import type { Race } from '../character/appearance';
+import type { ClassEntry, Race } from '../character/appearance';
+import type { Portraits } from '../character/portraits';
 import type { LoadingScreen } from '../character/backdrops';
 import type { ClassInfo, ItemSetInfo, ItemSummary, Slot } from '../character/equipment';
 import type { Image } from '../formats/blp';
@@ -32,7 +33,8 @@ export type Request =
     }
   | { id: number; method: 'pose'; sequence: number; time: number }
   | { id: number; method: 'searchItems'; slot: Slot; query: string }
-  | { id: number; method: 'classes'; raceId: number }
+  | { id: number; method: 'classList' }
+  | { id: number; method: 'portraits' }
   | { id: number; method: 'sets'; classId: number }
   | { id: number; method: 'randomOutfit'; minQuality: number }
   | { id: number; method: 'icon'; fileId: number }
@@ -49,7 +51,7 @@ export interface ItemSearchResult {
 /** An icon's pixels, or undefined if the file cannot be read. */
 export type IconResult = Image | undefined;
 
-export type { ClassInfo, ImportedRecord, ImportResult, ItemSetInfo, ItemSummary, LoadingScreen, PoseRequest, PoseResult, Race, Slot };
+export type { ClassEntry, ClassInfo, ImportedRecord, ImportResult, ItemSetInfo, ItemSummary, LoadingScreen, Portraits, PoseRequest, PoseResult, Race, Slot };
 
 export interface CharacterResult {
   scene: CharacterScene;

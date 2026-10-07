@@ -3,7 +3,7 @@ import type { OpenStage } from '../casc/storage';
 import type { PickedFile } from '../io/file-list-source';
 import type {
   CharacterResult,
-  ClassInfo,
+  ClassEntry,
   ImportedRecord,
   ImportResult,
   ItemSetInfo,
@@ -12,6 +12,7 @@ import type {
   ItemSearchResult,
   LoadingScreen,
   OpenResult,
+  Portraits,
   PoseRequest,
   PoseResult,
   Race,
@@ -88,8 +89,14 @@ export class DataClient {
     return this.call({ method: 'searchItems', slot, query });
   }
 
-  classes(raceId: number): Promise<ClassInfo[]> {
-    return this.call({ method: 'classes', raceId });
+  /** Every class some race can be, in the game's order, with the races that can be it. */
+  classList(): Promise<ClassEntry[]> {
+    return this.call({ method: 'classList' });
+  }
+
+  /** The race and class pictures of the character creation screen, from the game's interface atlas. */
+  portraits(): Promise<Portraits> {
+    return this.call({ method: 'portraits' });
   }
 
   sets(classId: number): Promise<ItemSetInfo[]> {
