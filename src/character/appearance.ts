@@ -1,5 +1,8 @@
 import type { Database } from '../db2/database';
 import type { Row } from '../db2/wdc';
+import { type ClassEntry, classList, playableRaces, type Race, type RaceExtras } from './races';
+
+export type { ClassEntry, Faction, Race } from './races';
 
 /*
  * The game's character appearance data: which model a race and sex use, which options and
@@ -15,15 +18,6 @@ export interface CharacterModel {
   fileId: number;
   /** Which texture layout (section rectangles, layer order) the model's skin uses. */
   layoutId: number;
-}
-
-export interface Race {
-  id: number;
-  name: string;
-  /** The game's file name for the race (`Orc`, `NightElf`, `Scourge`), as the addon API reports it. */
-  file: string;
-  /** Sexes the race has a model for: 0 = male, 1 = female. */
-  sexes: number[];
 }
 
 export interface Choice {
@@ -121,8 +115,10 @@ export class Appearance {
     private readonly sectionsByLayout: Map<number, Row[]>,
     private readonly boneSets: Map<number, { boneFileId: number; modelFileId: number }>,
     private readonly skinnedModels: Map<number, { fileId: number; group: number; variant: number }>,
-    /** Races a player can create in this product, in name order. */
+    /** Races a player can create in this product, in the game's display order. */
     readonly races: Race[],
+    /** Every class some race can be, in the game's order, with the races that can be it. */
+    readonly classes: ClassEntry[],
   ) {}
 
   static async load(database: Database): Promise<Appearance> {
@@ -153,8 +149,17 @@ export class Appearance {
       database.table('ChrCustomizationSkinnedModel', ['CollectionsFileDataID', 'GeosetType', 'GeosetID']),
       database.table('ChrRaces', ['Name_lang', 'ClientFileString']),
       // The race and class combinations the character creation screen offers.
-      database.table('CharBaseInfo', ['RaceID']),
+      database.table('CharBaseInfo', ['RaceID', 'ClassID']),
     ]);
+    // Which side of the character creation screen each race is on, and in what order; and the
+    // classes' file names. Older layouts lack these columns, and the character draws without them.
+    const extras = await database
+      .table('ChrRaces', ['Alliance', 'UiDisplayOrder'])
+      .then((table) => new Map<number, RaceExtras>(table.rows.map((row) => [n(row.ID), { alliance: row.Alliance, order: row.UiDisplayOrder }])))
+      .catch(() => undefined);
+    const chrClasses = await database
+      .table('ChrClasses', ['Name_lang', 'Filename'])
+      .catch(() => database.table('ChrClasses', ['Name_lang']));
 
     const byId = (rows: Row[]) => new Map(rows.map((row) => [n(row.ID), row]));
     const displayById = byId(displays.rows);
@@ -222,16 +227,8 @@ export class Appearance {
     }
 
     const creatableRaces = new Set(creatable.rows.map((row) => n(row.RaceID)));
-    const races: Race[] = chrRaces.rows
-      .filter((row) => creatableRaces.has(n(row.ID)))
-      .map((row) => ({
-        id: n(row.ID),
-        name: String(row.Name_lang),
-        file: String(row.ClientFileString ?? ''),
-        sexes: [0, 1].filter((sex) => models.has(`${n(row.ID)}:${sex}`)),
-      }))
-      .filter((race) => race.sexes.length > 0)
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const races = playableRaces(chrRaces.rows, creatableRaces, (raceId, sex) => models.has(`${raceId}:${sex}`), extras);
+    const classes = classList(chrClasses.rows, creatable.rows);
 
     return new Appearance(
       models,
@@ -260,6 +257,7 @@ export class Appearance {
         ]),
       ),
       races,
+      classes,
     );
   }
 

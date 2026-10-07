@@ -48,6 +48,8 @@ const TABLES = [
   'AnimationData',
   'LoadingScreens',
   'Map',
+  'UiTextureAtlas',
+  'UiTextureAtlasMember',
 ];
 
 /**
