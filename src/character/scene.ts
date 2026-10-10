@@ -9,7 +9,7 @@ import { animationName } from '../model/animation-names';
 import { findSequence, fingerBones, poseBones, resolveAlias } from '../model/pose';
 import { type Appearance, type Option, SLOT_SKIN, type TextureLayer } from './appearance';
 import { composite, type CompositeLayer } from './compositor';
-import type { Equipment, ItemLook, Slot } from './equipment';
+import type { Equipment, ItemLook, Slot, WeaponKind } from './equipment';
 import { type PosePreset, posePresets } from './poses';
 
 export interface SceneTexture extends Image {
@@ -250,17 +250,49 @@ function attachmentMatrix(body: M2Model, bones: Float32Array, attachmentId: numb
   return multiply(new Float32Array(16), bones.subarray(attachment.bone * 16, attachment.bone * 16 + 16), offset);
 }
 
-export async function buildCharacterScene(
-  storage: CascStorage,
-  appearance: Appearance,
-  equipment: Equipment | undefined,
-  request: CharacterRequest,
-): Promise<{ scene: CharacterScene; rig: CharacterRig }> {
-  const problems: string[] = [];
-  const characterModel = appearance.model(request.raceId, request.sex);
-  if (!characterModel) throw new Error(`The game data has no model for race ${request.raceId}, sex ${request.sex}`);
+/** How a mesh follows the body: it is the body, it is worn on the body's bones, or it is mounted on an attachment point. */
+export type Follows = 'body' | 'worn' | { attachment: number; own: Float32Array };
 
-  // Files that belong to an item are reported under the item's name.
+/** The part of building a scene that any model shares: reading files and reporting what cannot be read. */
+export interface SceneReaders {
+  problems: string[];
+  /** Files that belong to an item, by the item's name, so a problem with one is reported under it. */
+  itemOfFile: Map<number, string>;
+  read(fileId: number, what: string): Promise<Uint8Array | undefined>;
+  readModel(fileId: number, what: string): Promise<{ model: M2Model; skin: Skin } | undefined>;
+  /** A texture's pixels, decoded once however often it is asked for. */
+  image(fileId: number, what: string): Promise<Image | undefined>;
+  /** Everything that builds on one body model: its meshes, textures and poses. `scale` is the game's size for it. */
+  body(model: M2Model, scale?: number): SceneBuilder;
+}
+
+/** Builds and poses the meshes of one body model and whatever rides on it. */
+export interface SceneBuilder {
+  /** Textures shared between the meshes, in the order the scene lists them. */
+  textures: SceneTexture[];
+  /** Textures composited for the body's slots (skin, hair ...), by texture type; filled before meshes are built. */
+  slots: Map<number, Image>;
+  /** Bone adjustments (face shapes) merged before posing. */
+  boneOffsets: BoneOffsets;
+  /** A hand closed around what it holds: the hands-closed sequence and the finger bones that take it. */
+  gripping: { sequence: number; bones: Set<number> } | undefined;
+  buildMesh(source: M2Model, skin: Skin, visible: boolean[], follows: Follows, owner?: string, overrides?: ReadonlyMap<number, number>): Promise<SceneMesh>;
+  /** Whether a sequence's keys are in the model or in a file that is on disk. */
+  playable(sequence: number): boolean;
+  pose(sequence: number, time: number, preset?: string): Promise<PoseResult>;
+  /** The model's animations that can be played. */
+  animations(): AnimationInfo[];
+  /** The curated poses the model can strike with what it holds. */
+  presets(wielding: WeaponKind | 'unarmed'): PosePreset[];
+  /** The pose asked for, or Stand if the model cannot strike it; a model with no Stand is reported. */
+  choose(asked: PoseRequest | undefined, presets: readonly PosePreset[]): { sequence: number; time: number; preset?: string };
+  /** Give every mesh built so far the bones and transform of a pose. */
+  apply(posed: PoseResult): void;
+}
+
+/** The readers a scene is built with, for a character or a creature alike. */
+export function sceneReaders(storage: CascStorage): SceneReaders {
+  const problems: string[] = [];
   const itemOfFile = new Map<number, string>();
   const named = (fileId: number, what: string) => {
     const item = itemOfFile.get(fileId);
@@ -283,13 +315,201 @@ export async function buildCharacterScene(
     const skinBytes = await read(model.skinFileIds[0] ?? 0, `${what}'s skin`);
     return skinBytes && { model, skin: parseSkin(skinBytes) };
   };
+  const images = new Map<number, Image | undefined>();
+  const image = async (fileId: number, what: string): Promise<Image | undefined> => {
+    if (!images.has(fileId)) {
+      const bytes = await read(fileId, what);
+      images.set(fileId, bytes && decodeBlp(bytes));
+    }
+    return images.get(fileId);
+  };
+  const readers: SceneReaders = { problems, itemOfFile, read, readModel, image, body: (model, scale) => sceneBuilder(storage, readers, model, scale ?? 1) };
+  return readers;
+}
 
+function sceneBuilder(storage: CascStorage, readers: SceneReaders, model: M2Model, scale: number): SceneBuilder {
+  const { problems, image } = readers;
+  const slots = new Map<number, Image>();
+
+  // Scene textures are shared between meshes: a slot (skin, hair ...) or a file is uploaded once.
+  const textures: SceneTexture[] = [];
+  const sceneTextureOf = new Map<string, number>();
+  const textureFor = async (
+    source: M2Model,
+    modelTexture: number,
+    sectionId: number,
+    owner: string | undefined,
+    overrides: ReadonlyMap<number, number> | undefined,
+  ): Promise<number> => {
+    const of = owner ? `${owner}: geoset` : 'Geoset';
+    const texture = source.textures[modelTexture];
+    if (!texture) {
+      problems.push(`${of} ${sectionId} uses texture ${modelTexture}, which the model does not have`);
+      return -1;
+    }
+    // A model's own file, a texture the item supplies for the slot, or one of the character's slots.
+    const fileId = texture.type === 0 ? texture.fileId : (overrides?.get(texture.type) ?? 0);
+    const key = `${fileId ? `file:${fileId}` : `slot:${texture.type}`}:${texture.flags & 3}`;
+    const known = sceneTextureOf.get(key);
+    if (known !== undefined) return known;
+    let picture: Image | undefined;
+    if (fileId) picture = await image(fileId, owner ? 'A texture' : 'A model texture');
+    else {
+      picture = slots.get(texture.type);
+      if (!picture) problems.push(`${of} ${sectionId} needs a texture for slot ${texture.type}, and nothing fills it`);
+    }
+    let index = -1;
+    if (picture) {
+      index = textures.length;
+      textures.push({ ...picture, wrapX: (texture.flags & 1) !== 0, wrapY: (texture.flags & 2) !== 0 });
+    }
+    sceneTextureOf.set(key, index);
+    return index;
+  };
+
+  const posable: { mesh: SceneMesh; source: M2Model; skin: Skin; visible: boolean[]; follows: Follows }[] = [];
+  const buildMesh = async (
+    source: M2Model,
+    sourceSkin: Skin,
+    visible: boolean[],
+    follows: Follows,
+    owner?: string,
+    overrides?: ReadonlyMap<number, number>,
+  ): Promise<SceneMesh> => {
+    const draws: SceneDraw[] = [];
+    for (const batch of sourceSkin.batches) {
+      if (!visible[batch.sectionIndex]) continue;
+      const section = sourceSkin.sections[batch.sectionIndex]!;
+      const material = source.materials[batch.materialIndex];
+      const stageTextures: number[] = [];
+      for (let stage = 0; stage < Math.min(batch.textureCount, 4); stage++) {
+        const modelTexture = source.textureCombos[batch.textureComboIndex + stage];
+        stageTextures.push(modelTexture === undefined ? -1 : await textureFor(source, modelTexture, section.id, owner, overrides));
+      }
+      draws.push({
+        sectionId: section.id,
+        indexStart: section.indexStart,
+        indexCount: section.indexCount,
+        shaderId: batch.shaderId,
+        textureCount: batch.textureCount,
+        blendMode: material?.blendMode ?? 0,
+        materialFlags: material?.flags ?? 0,
+        priority: batch.priority,
+        layer: batch.materialLayer,
+        textures: stageTextures,
+      });
+    }
+    // The skin uses a prefix of the model's vertices; triangles index them through its lookup.
+    let vertexCount = 0;
+    for (const v of sourceSkin.vertexLookup) if (v >= vertexCount) vertexCount = v + 1;
+    const vertices = source.vertices.slice(0, vertexCount * VERTEX_SIZE);
+    const indices = new Uint16Array(sourceSkin.indices.length);
+    for (let i = 0; i < indices.length; i++) indices[i] = sourceSkin.vertexLookup[sourceSkin.indices[i]!]!;
+    const billboards = source.bones.flatMap((bone, index) =>
+      bone.flags & BONE_BILLBOARD ? [{ bone: index, pivot: bone.pivot }] : [],
+    );
+    // Bones and transform are filled in when the scene is posed.
+    const mesh: SceneMesh = { vertices, indices, bones: new Float32Array(0), transform: identity(), billboards, draws };
+    posable.push({ mesh, source, skin: sourceSkin, visible, follows });
+    return mesh;
+  };
+
+  // Posing. Keys of sequences stored outside the model are read the first time they are needed.
+  const anims = new Map<number, Uint8Array>();
+  const animFileOf = (sequence: number) => {
+    const { id, variation } = model.sequences[sequence]!;
+    return model.animFiles.find((file) => file.sequenceId === id && file.variation === variation)?.fileId ?? 0;
+  };
+  const inline = (sequence: number) => (model.sequences[sequence]!.flags & SEQUENCE_INLINE) !== 0;
+  const playable = (sequence: number) => {
+    const holder = resolveAlias(model.sequences, sequence);
+    return inline(holder) || storage.files.find(animFileOf(holder)) !== undefined;
+  };
+
+  const builder: SceneBuilder = {
+    textures,
+    slots,
+    boneOffsets: new Map(),
+    gripping: undefined,
+    buildMesh,
+    playable,
+    pose: async (sequence, time, preset) => {
+      const holder = model.sequences[sequence] ? resolveAlias(model.sequences, sequence) : -1;
+      if (holder >= 0 && !inline(holder) && !anims.has(holder)) {
+        const file = await storage.readFile(animFileOf(holder));
+        if (!file) throw new Error(`The ${animationName(model.sequences[holder]!.id)} animation is not on disk`);
+        anims.set(holder, animKeyData(file.data));
+      }
+      const duration = model.sequences[holder]?.duration ?? 0;
+      const at = Math.min(Math.max(time, 0), duration);
+      const bones = poseBones(model, sequence, at, anims, builder.boneOffsets, builder.gripping);
+      const min: [number, number, number] = [Infinity, Infinity, Infinity];
+      const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+      const posed = posable.map(({ mesh, source, skin: meshSkin, visible, follows }) => {
+        let meshBones: Float32Array;
+        let transform = identity();
+        if (follows === 'body') meshBones = bones;
+        else if (follows === 'worn') meshBones = wornBones(source, model, bones);
+        else {
+          meshBones = follows.own.slice();
+          transform = attachmentMatrix(model, bones, follows.attachment) ?? transform;
+        }
+        // The game's size for the model, about the feet, so a scaled character still stands on the ground.
+        if (scale !== 1) transform = multiply(new Float32Array(16), scaling(scale), transform);
+        growBounds(min, max, mesh.vertices, meshSkin, visible, meshBones, transform);
+        return { bones: meshBones, transform };
+      });
+      return { meshes: posed, bounds: { min, max }, pose: { sequence, time: at, duration, preset } };
+    },
+    animations: () =>
+      model.sequences.flatMap((sequence, index) =>
+        sequence.id !== ANIMATION_HANDS_CLOSED && sequence.duration > 0 && playable(index)
+          ? [{ sequence: index, id: sequence.id, variation: sequence.variation, name: animationName(sequence.id), duration: sequence.duration }]
+          : [],
+      ),
+    presets: (wielding) => posePresets(model.sequences, wielding, playable),
+    choose: (asked, presets) => {
+      const stand = findSequence(model.sequences, ANIMATION_STAND);
+      if (stand < 0) problems.push('The model has no Stand animation, so it is shown in its rest pose');
+      let chosen: { sequence: number; time: number; preset?: string } = { sequence: stand, time: 0, preset: stand >= 0 ? 'Stand' : undefined };
+      if (asked && 'preset' in asked) {
+        const preset = presets.find((p) => p.name === asked.preset);
+        if (preset) chosen = { sequence: preset.sequence, time: preset.time, preset: preset.name };
+      } else if (asked) {
+        const sequence = findSequence(model.sequences, asked.animationId, asked.variation);
+        if (sequence >= 0 && playable(sequence)) chosen = { sequence, time: asked.time };
+      }
+      return chosen;
+    },
+    apply: (posed) => {
+      posable.forEach(({ mesh }, i) => {
+        mesh.bones = posed.meshes[i]!.bones;
+        mesh.transform = posed.meshes[i]!.transform;
+      });
+    },
+  };
+  return builder;
+}
+
+export async function buildCharacterScene(
+  storage: CascStorage,
+  appearance: Appearance,
+  equipment: Equipment | undefined,
+  request: CharacterRequest,
+): Promise<{ scene: CharacterScene; rig: CharacterRig }> {
+  const characterModel = appearance.model(request.raceId, request.sex);
+  if (!characterModel) throw new Error(`The game data has no model for race ${request.raceId}, sex ${request.sex}`);
+
+  const readers = sceneReaders(storage);
+  const { problems, itemOfFile, read, readModel, image } = readers;
   const body = await readModel(characterModel.fileId, 'The character model');
   if (!body) throw new Error(problems[problems.length - 1]);
   const { model, skin } = body;
   if (model.skeletonFileId !== 0) {
     throw new Error('This model keeps its skeleton in a separate file, which Mogshot cannot read yet');
   }
+  const builder = readers.body(model, request.scale);
+  const { slots, buildMesh } = builder;
 
   const options = appearance.options(characterModel.chrModelId);
   const choices = new Map(appearance.defaultChoices(characterModel.chrModelId));
@@ -362,15 +582,6 @@ export async function buildCharacterScene(
   }
 
   // Composite one texture per slot from the layers the choices produce.
-  const images = new Map<number, Image | undefined>();
-  const image = async (fileId: number, what: string): Promise<Image | undefined> => {
-    if (!images.has(fileId)) {
-      const bytes = await read(fileId, what);
-      images.set(fileId, bytes && decodeBlp(bytes));
-    }
-    return images.get(fileId);
-  };
-  const slots = new Map<number, Image>();
   // A bake stands in for every skin layer the choices would paint; armour from items still goes over it.
   if (request.bake) {
     const picture = await image(request.bake, 'The painted body texture');
@@ -415,94 +626,8 @@ export async function buildCharacterScene(
     }
   }
 
-  // Scene textures are shared between meshes: a slot (skin, hair ...) or a file is uploaded once.
-  const textures: SceneTexture[] = [];
-  const sceneTextureOf = new Map<string, number>();
-  const textureFor = async (
-    source: M2Model,
-    modelTexture: number,
-    sectionId: number,
-    owner: string | undefined,
-    overrides: ReadonlyMap<number, number> | undefined,
-  ): Promise<number> => {
-    const of = owner ? `${owner}: geoset` : 'Geoset';
-    const texture = source.textures[modelTexture];
-    if (!texture) {
-      problems.push(`${of} ${sectionId} uses texture ${modelTexture}, which the model does not have`);
-      return -1;
-    }
-    // A model's own file, a texture the item supplies for the slot, or one of the character's slots.
-    const fileId = texture.type === 0 ? texture.fileId : (overrides?.get(texture.type) ?? 0);
-    const key = `${fileId ? `file:${fileId}` : `slot:${texture.type}`}:${texture.flags & 3}`;
-    const known = sceneTextureOf.get(key);
-    if (known !== undefined) return known;
-    let picture: Image | undefined;
-    if (fileId) picture = await image(fileId, owner ? 'A texture' : 'A model texture');
-    else {
-      picture = slots.get(texture.type);
-      if (!picture) problems.push(`${of} ${sectionId} needs a texture for slot ${texture.type}, and nothing fills it`);
-    }
-    let index = -1;
-    if (picture) {
-      index = textures.length;
-      textures.push({ ...picture, wrapX: (texture.flags & 1) !== 0, wrapY: (texture.flags & 2) !== 0 });
-    }
-    sceneTextureOf.set(key, index);
-    return index;
-  };
-
-  /** How a mesh follows the body: it is the body, it is worn on the body's bones, or it is mounted on an attachment point. */
-  type Follows = 'body' | 'worn' | { attachment: number; own: Float32Array };
-  const posable: { mesh: SceneMesh; source: M2Model; skin: Skin; visible: boolean[]; follows: Follows }[] = [];
-
-  const buildMesh = async (
-    source: M2Model,
-    sourceSkin: Skin,
-    visible: boolean[],
-    follows: Follows,
-    owner?: string,
-    overrides?: ReadonlyMap<number, number>,
-  ): Promise<SceneMesh> => {
-    const draws: SceneDraw[] = [];
-    for (const batch of sourceSkin.batches) {
-      if (!visible[batch.sectionIndex]) continue;
-      const section = sourceSkin.sections[batch.sectionIndex]!;
-      const material = source.materials[batch.materialIndex];
-      const stageTextures: number[] = [];
-      for (let stage = 0; stage < Math.min(batch.textureCount, 4); stage++) {
-        const modelTexture = source.textureCombos[batch.textureComboIndex + stage];
-        stageTextures.push(modelTexture === undefined ? -1 : await textureFor(source, modelTexture, section.id, owner, overrides));
-      }
-      draws.push({
-        sectionId: section.id,
-        indexStart: section.indexStart,
-        indexCount: section.indexCount,
-        shaderId: batch.shaderId,
-        textureCount: batch.textureCount,
-        blendMode: material?.blendMode ?? 0,
-        materialFlags: material?.flags ?? 0,
-        priority: batch.priority,
-        layer: batch.materialLayer,
-        textures: stageTextures,
-      });
-    }
-    // The skin uses a prefix of the model's vertices; triangles index them through its lookup.
-    let vertexCount = 0;
-    for (const v of sourceSkin.vertexLookup) if (v >= vertexCount) vertexCount = v + 1;
-    const vertices = source.vertices.slice(0, vertexCount * VERTEX_SIZE);
-    const indices = new Uint16Array(sourceSkin.indices.length);
-    for (let i = 0; i < indices.length; i++) indices[i] = sourceSkin.vertexLookup[sourceSkin.indices[i]!]!;
-    const billboards = source.bones.flatMap((bone, index) =>
-      bone.flags & BONE_BILLBOARD ? [{ bone: index, pivot: bone.pivot }] : [],
-    );
-    // Bones and transform are filled in when the scene is posed.
-    const mesh: SceneMesh = { vertices, indices, bones: new Float32Array(0), transform: identity(), billboards, draws };
-    posable.push({ mesh, source, skin: sourceSkin, visible, follows });
-    return mesh;
-  };
-
   // Face shapes and the like: adjustments to some bones, merged in the order the choices give them.
-  const boneOffsets: BoneOffsets = new Map();
+  const { boneOffsets } = builder;
   for (const fileId of resolved.boneFiles) {
     // The game data names some adjustment files that no build contains; the game shows
     // the base shape for those, so they are not a fault in the picture.
@@ -521,7 +646,7 @@ export async function buildCharacterScene(
   if (holds(mainHand) && !mainHand!.bow) for (const bone of fingerBones(model.bones, 'right')) grip.add(bone);
   if (holds(offHand) || (holds(mainHand) && mainHand!.bow)) for (const bone of fingerBones(model.bones, 'left')) grip.add(bone);
   const closed = findSequence(model.sequences, ANIMATION_HANDS_CLOSED);
-  const gripping = closed >= 0 && grip.size > 0 ? { sequence: closed, bones: grip } : undefined;
+  builder.gripping = closed >= 0 && grip.size > 0 ? { sequence: closed, bones: grip } : undefined;
 
   const meshes = [await buildMesh(model, skin, visibleSections(skin, resolved.geosets), 'body')];
 
@@ -577,78 +702,16 @@ export async function buildCharacterScene(
     }
   }
 
-  // Posing. Keys of sequences stored outside the model are read the first time they are needed.
-  const anims = new Map<number, Uint8Array>();
-  const animFileOf = (sequence: number) => {
-    const { id, variation } = model.sequences[sequence]!;
-    return model.animFiles.find((file) => file.sequenceId === id && file.variation === variation)?.fileId ?? 0;
-  };
-  const inline = (sequence: number) => (model.sequences[sequence]!.flags & SEQUENCE_INLINE) !== 0;
-  /** Whether a sequence's keys are in the model or in a file that is on disk. */
-  const playable = (sequence: number) => {
-    const holder = resolveAlias(model.sequences, sequence);
-    return inline(holder) || storage.files.find(animFileOf(holder)) !== undefined;
-  };
-
-  const scale = request.scale ?? 1;
-  const pose = async (sequence: number, time: number, preset?: string): Promise<PoseResult> => {
-    const holder = model.sequences[sequence] ? resolveAlias(model.sequences, sequence) : -1;
-    if (holder >= 0 && !inline(holder) && !anims.has(holder)) {
-      const file = await storage.readFile(animFileOf(holder));
-      if (!file) throw new Error(`The ${animationName(model.sequences[holder]!.id)} animation is not on disk`);
-      anims.set(holder, animKeyData(file.data));
-    }
-    const duration = model.sequences[holder]?.duration ?? 0;
-    const at = Math.min(Math.max(time, 0), duration);
-    const bones = poseBones(model, sequence, at, anims, boneOffsets, gripping);
-    const min: [number, number, number] = [Infinity, Infinity, Infinity];
-    const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
-    const posed = posable.map(({ mesh, source, skin: meshSkin, visible, follows }) => {
-      let meshBones: Float32Array;
-      let transform = identity();
-      if (follows === 'body') meshBones = bones;
-      else if (follows === 'worn') meshBones = wornBones(source, model, bones);
-      else {
-        meshBones = follows.own.slice();
-        transform = attachmentMatrix(model, bones, follows.attachment) ?? transform;
-      }
-      // The game's size for the model, about the feet, so a scaled character still stands on the ground.
-      if (scale !== 1) transform = multiply(new Float32Array(16), scaling(scale), transform);
-      growBounds(min, max, mesh.vertices, meshSkin, visible, meshBones, transform);
-      return { bones: meshBones, transform };
-    });
-    return { meshes: posed, bounds: { min, max }, pose: { sequence, time: at, duration, preset } };
-  };
-
   const wielding = mainHand?.weapon ?? (offHand?.weapon ? 'oneHand' : 'unarmed');
-  const presets = posePresets(model.sequences, wielding, playable);
-  const animations: AnimationInfo[] = model.sequences.flatMap((sequence, index) =>
-    sequence.id !== ANIMATION_HANDS_CLOSED && sequence.duration > 0 && playable(index)
-      ? [{ sequence: index, id: sequence.id, variation: sequence.variation, name: animationName(sequence.id), duration: sequence.duration }]
-      : [],
-  );
-
-  // The pose asked for, or Stand if this model cannot strike it.
-  const stand = findSequence(model.sequences, ANIMATION_STAND);
-  if (stand < 0) problems.push('The model has no Stand animation, so it is shown in its rest pose');
-  let chosen: { sequence: number; time: number; preset?: string } = { sequence: stand, time: 0, preset: stand >= 0 ? 'Stand' : undefined };
-  const asked = request.pose;
-  if (asked && 'preset' in asked) {
-    const preset = presets.find((p) => p.name === asked.preset);
-    if (preset) chosen = { sequence: preset.sequence, time: preset.time, preset: preset.name };
-  } else if (asked) {
-    const sequence = findSequence(model.sequences, asked.animationId, asked.variation);
-    if (sequence >= 0 && playable(sequence)) chosen = { sequence, time: asked.time };
-  }
-  const first = await pose(chosen.sequence, chosen.time, chosen.preset);
-  posable.forEach(({ mesh }, i) => {
-    mesh.bones = first.meshes[i]!.bones;
-    mesh.transform = first.meshes[i]!.transform;
-  });
+  const presets = builder.presets(wielding);
+  const animations = builder.animations();
+  const chosen = builder.choose(request.pose, presets);
+  const first = await builder.pose(chosen.sequence, chosen.time, chosen.preset);
+  builder.apply(first);
 
   const scene: CharacterScene = {
     meshes,
-    textures,
+    textures: builder.textures,
     bounds: first.bounds,
     problems,
     options,
@@ -657,8 +720,7 @@ export async function buildCharacterScene(
     presets,
     pose: first.pose,
   };
-  return { scene, rig: { pose: (sequence, time) => pose(sequence, time) } };
-
+  return { scene, rig: { pose: (sequence, time) => builder.pose(sequence, time) } };
 }
 
 /** Grow a box to include the vertices of the visible sections after posing. */

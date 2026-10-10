@@ -9,7 +9,7 @@ Ideas that are not the one job (folder → character → pose → transparent PN
 - Stickers, and a choice of fonts and colours for the title (a title and a second line are built)
 - Share codes
 - 3D export
-- Creatures on the page, and mounts (NPCs by display id or name are built on the command line)
+- Creatures on the page, and mounts (NPCs and creatures by display id or name are built on the command line; a creature model's variant sections are all shown, since which the game shows is not read)
 - Import from the armory (the addon import is built)
 - User accounts
 - Safari and Firefox support

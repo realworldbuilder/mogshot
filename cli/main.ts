@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { SLOTS, type Slot } from '../src/character/equipment';
+import { buildCreatureScene } from '../src/character/creature-scene';
 import { buildCharacterScene, type CharacterRig, type CharacterScene } from '../src/character/scene';
 import { CLIP_FORMATS, clipTimes, loopedTimes } from '../src/render/clip';
 import { buildPlace } from '../src/world/place';
@@ -36,7 +37,8 @@ Everything is printed as JSON. A spec, with every field but a race, a character 
     "race": "Night Elf", "sex": "female",
     "npc": 7274,                                  a creature display id, or an NPC's name where the game knows it (mogshot npcs);
                                                   drawn as the game draws it, so leave out race, sex and character. "gear" and
-                                                  "set" replace its gear slot by slot, "choices" its look
+                                                  "set" replace its gear slot by slot, "choices" its look; a creature with a
+                                                  model of its own (a beast, a pet) has none of those
     "choices": { "Hair Style": 4, "Face": "…" },  option -> choice by place in the list (from 1), name, or {"id": n}
     "set": { "class": "Hunter", "name": "Giantstalker" },   without a name, the class's best set
     "gear": { "head": 16939, "mainHand": "Rhok'delar", "back": null },   id, name, or null to leave empty
@@ -247,9 +249,9 @@ async function render(file: string | undefined, session: Session, host: Host): P
           ...(clip && { clip: { kind: CLIP_FORMATS[clip.format].name, animation: clip.animation, frames: clip.poses.length, fps: clip.fps, length: Number((clip.poses.length / clip.fps).toFixed(2)) } }),
           seconds: Number(((performance.now() - start) / 1000).toFixed(1)),
           ...(shot.npc && { npc: { id: shot.npc.displayId, name: shot.npc.name, title: shot.npc.title, creature: shot.npc.creatureId, scale: shot.npc.scale } }),
-          // An NPC can be built on a race no player can be.
-          race: world.appearance.races.find((r) => r.id === shot.raceId)?.name ?? `Race ${shot.raceId}`,
-          sex: sexName(shot.sex),
+          // An NPC can be built on a race no player can be; a creature of its own kind has none.
+          ...(shot.raceId !== undefined && { race: world.appearance.races.find((r) => r.id === shot.raceId)?.name ?? `Race ${shot.raceId}` }),
+          ...(shot.sex !== undefined && { sex: sexName(shot.sex) }),
           pose: scene.pose.preset ?? scene.animations.find((a) => a.sequence === scene.pose.sequence)?.name,
           gear: Object.fromEntries([
             ...[...shot.gear].map(([slot, item]) => [slot, `${item.name} (${item.id})`]),
@@ -280,18 +282,21 @@ async function worldOf(session: Session): Promise<World> {
   return { appearance, equipment, classes, screens, records, maps, creatures, seen, installed: (fileId) => session.storage.files.find(fileId) !== undefined };
 }
 
-/** Build the shot's character in its pose. */
+/** Build the shot's character, or creature, in its pose. */
 async function build(shot: Shot, session: Session, world: World): Promise<{ scene: CharacterScene; rig: CharacterRig }> {
-  const { scene, rig } = await buildCharacterScene(session.storage, world.appearance, world.equipment, {
-    raceId: shot.raceId,
-    sex: shot.sex,
-    choices: shot.choices,
-    gear: new Map([...shot.gear].map(([slot, item]) => [slot, item.id])),
-    wear: shot.wear,
-    bake: shot.bake,
-    scale: shot.npc?.scale,
-    pose: shot.pose,
-  });
+  const { scene, rig } =
+    shot.creature || shot.raceId === undefined || shot.sex === undefined
+      ? await buildCreatureScene(session.storage, { modelFileId: shot.creature!.fileId, textures: shot.creature!.textures, scale: shot.creature!.scale }, { pose: shot.pose })
+      : await buildCharacterScene(session.storage, world.appearance, world.equipment, {
+          raceId: shot.raceId,
+          sex: shot.sex,
+          choices: shot.choices,
+          gear: new Map([...shot.gear].map(([slot, item]) => [slot, item.id])),
+          wear: shot.wear,
+          bake: shot.bake,
+          scale: shot.npc?.scale,
+          pose: shot.pose,
+        });
   // The scene falls back to Stand for a pose the model cannot strike; a picture in the wrong pose is not what was asked for.
   if ('preset' in shot.pose && scene.pose.preset !== shot.pose.preset) {
     throw new Error(`There is no pose called "${shot.pose.preset}" for this character. The poses are: ${scene.presets.map((p) => p.name).join(', ')}`);

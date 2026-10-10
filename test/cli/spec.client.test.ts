@@ -71,8 +71,12 @@ describe.skipIf(!hasClient)('a spec', () => {
     expect(() => resolveSpec({ npc: 7274, race: 'Orc' }, world)).toThrow(/leave out "race", "sex" and "character"/);
     expect(() => resolveSpec({ npc: 'Nobody Anywhere' }, world)).toThrow(/no NPC called "Nobody Anywhere".*Mechanical Squirrel.*display id/);
     expect(() => resolveSpec({ npc: 999999999 }, world)).toThrow(/no creature display 999999999/);
-    // A name the game files know, whose look has no player model behind it.
-    expect(() => resolveSpec({ npc: 'Mechanical Squirrel' }, world)).toThrow(/Mechanical Squirrel is not built on a player model/);
+    // A name the game files know, whose look is a model of its own: nothing to choose or wear.
+    const squirrel = resolveSpec({ npc: 'Mechanical Squirrel' }, world);
+    expect(squirrel.npc).toMatchObject({ creatureId: 2671, name: 'Mechanical Squirrel' });
+    expect(squirrel.creature).toMatchObject({ scale: expect.closeTo(1.3, 3) });
+    expect(squirrel.raceId).toBeUndefined();
+    expect(() => resolveSpec({ npc: 'Mechanical Squirrel', gear: { head: 22418 } }, world)).toThrow(/Mechanical Squirrel has no appearance options or gear/);
   });
 
   it('is drawn to a PNG by the command line', async () => {
@@ -87,6 +91,7 @@ describe.skipIf(!hasClient)('a spec', () => {
         { out: 'titled.png', race: 'Tauren', sex: 'male', pose: { animation: 'EmoteDance', at: 0.3 }, size: { width: 640, height: 360 }, backdrop: 'Frost', title: { text: 'Moo', sub: 'of Thunder Bluff' } },
         { out: 'untitled.png', race: 'Human', sex: 'female', title: 'Left off' },
         { out: 'tyrande.png', npc: 7274, pose: 'Cast', size: { width: 600, height: 800, tight: true } },
+        { out: 'squirrel.png', npc: 'Mechanical Squirrel', size: { width: 400, height: 400 }, backdrop: 'Frost' },
       ]),
     );
     const { stdout } = await promisify(execFile)('node', [join(ROOT, 'bin', 'mogshot.mjs'), 'render', join(dir, 'shots.json'), '--wow', WOW_DIR]).catch(
@@ -96,7 +101,7 @@ describe.skipIf(!hasClient)('a spec', () => {
         return error;
       },
     );
-    const [tight, backdrop, bad, titled, untitled, tyrande] = JSON.parse(stdout) as { width: number; height: number; problems: string[]; pose: string; error?: string; npc?: { id: number }; gear: Record<string, string> }[];
+    const [tight, backdrop, bad, titled, untitled, tyrande, squirrel] = JSON.parse(stdout) as { width: number; height: number; problems: string[]; pose: string; error?: string; npc?: { id: number; name?: string }; race?: string; gear: Record<string, string> }[];
 
     expect(tight!.problems).toEqual([]);
     const cut = decodePng(new Uint8Array(await readFile(join(dir, 'tight.png'))));
@@ -139,6 +144,14 @@ describe.skipIf(!hasClient)('a spec', () => {
     const priestess = decodePng(new Uint8Array(await readFile(join(dir, 'tyrande.png'))));
     expect(Math.max(priestess.width, priestess.height)).toBe(800);
     expect(alphaBounds(priestess)!.height).toBeGreaterThan(700);
+
+    // A creature of its own kind: no race, no gear, a picture all the same.
+    expect(squirrel!.problems).toEqual([]);
+    expect(squirrel!.npc).toMatchObject({ name: 'Mechanical Squirrel' });
+    expect(squirrel!.race).toBeUndefined();
+    expect(squirrel!.gear).toEqual({});
+    const pet = decodePng(new Uint8Array(await readFile(join(dir, 'squirrel.png'))));
+    expect([pet.width, pet.height]).toEqual([400, 400]);
   }, 120_000);
 
   it('films a looping clip as video, GIF and PNG frames', async () => {
