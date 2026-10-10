@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { CascStorage } from '../../src/casc/storage';
 import { Appearance } from '../../src/character/appearance';
+import { Creatures } from '../../src/character/creatures';
+import { Equipment } from '../../src/character/equipment';
 import { buildCharacterScene, type CharacterScene } from '../../src/character/scene';
 import type { CascStorage as Storage } from '../../src/casc/storage';
 import { Database } from '../../src/db2/database';
@@ -95,4 +97,52 @@ describe.skipIf(!hasClient)('human male scene', () => {
     }
     console.log(report.join('\n'));
   }, 120_000);
+});
+
+// Tyrande Whisperwind: a night elf female drawn with an NPC's choices, item looks and painted body.
+describe.skipIf(!hasClient)('Tyrande scene', () => {
+  let scene: CharacterScene;
+
+  beforeAll(async () => {
+    const storage = await CascStorage.open(new NodeSource(WOW_DIR));
+    const definitions = new Definitions(async (url) => {
+      const text = await cachedFetch(url, `dbd/${url.split('/').pop()}`);
+      if (text === undefined) throw new Error(`Could not fetch ${url}`);
+      return text;
+    });
+    const database = new Database(storage, definitions);
+    const [appearance, equipment, creatures] = await Promise.all([Appearance.load(database), Equipment.load(database), Creatures.load(database)]);
+    const { humanoid } = creatures.display(7274)!;
+    const model = appearance.model(humanoid!.raceId, humanoid!.sex)!;
+    const bake = (appearance.skinSize(model)?.width ?? 0) >= 2048 ? humanoid!.hdBakeFileId : humanoid!.bakeFileId;
+    scene = (
+      await buildCharacterScene(storage, appearance, equipment, {
+        raceId: humanoid!.raceId, sex: humanoid!.sex, choices: humanoid!.choices, wear: humanoid!.wear, bake, pose: { preset: 'Stand' },
+      })
+    ).scene;
+    scene.textures.forEach((texture, i) => writePng(`test-results/scene/tyrande-texture-${i}.png`, texture));
+  }, 120_000);
+
+  it('has nothing to report as missing, and every draw textured', () => {
+    expect(scene.problems).toEqual([]);
+    for (const draw of scene.meshes.flatMap((mesh) => mesh.draws)) expect(draw.textures.every((t) => t >= 0)).toBe(true);
+  });
+
+  it('wears the circlet as a second mesh and the long skirt as a geoset', () => {
+    expect(scene.meshes.length).toBeGreaterThanOrEqual(2);
+    expect(scene.meshes[0]!.draws.some((d) => d.sectionId === 1302)).toBe(true);
+  });
+
+  it('keeps every one of her ten choices', () => {
+    const choices = new Map(scene.choices);
+    expect(choices.get(8529)).toBe(54371);
+    expect(choices.get(49)).toBe(809);
+    expect(choices.get(745)).toBe(8175);
+  });
+
+  it('stands at player height', () => {
+    const height = scene.bounds.max[2] - scene.bounds.min[2];
+    expect(height).toBeGreaterThan(2.0);
+    expect(height).toBeLessThan(2.6);
+  });
 });

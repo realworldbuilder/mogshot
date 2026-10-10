@@ -1,7 +1,9 @@
 import type { Appearance, Option, Race } from '../src/character/appearance';
 import type { LoadingScreen } from '../src/character/backdrops';
+import type { CreatureDisplay, Creatures } from '../src/character/creatures';
 import { type ClassInfo, type Equipment, type ItemSummary, type Slot, SLOTS } from '../src/character/equipment';
 import type { PoseRequest } from '../src/character/scene';
+import type { CachedCreature } from '../src/import/creature-cache';
 import { decodeRecord, type ImportedRecord } from '../src/import/record';
 import { resolveImport } from '../src/import/resolve';
 import { type Backdrop, GRADIENTS, NO_BACKDROP } from '../src/render/backdrop';
@@ -9,7 +11,7 @@ import { CLIP_FPS, type ClipFormat, clipSize, evenSize, GIF_FPS } from '../src/r
 import { type Camera, DEFAULT_CAMERA } from '../src/render/renderer';
 import { hasTitle, type Title } from '../src/render/title';
 import type { Spot } from '../src/world/place';
-import type { MapInfo } from './session';
+import type { MapInfo, SeenCreatures } from './session';
 
 /*
  * A picture as someone writes it down: names where the page has menus, numbers where it has
@@ -24,6 +26,12 @@ export interface Spec {
   out?: string;
   /** A character the addon captured (`Rambleon`, `Rambleon-Realm`) or a pasted `MOG…` code: the starting point. */
   character?: string;
+  /**
+   * An NPC in place of a player character: a creature display id, or the NPC's name where
+   * the game knows it (the pets the files list, and NPCs this computer has seen in the
+   * game). Drawn as the game draws it, so `race`, `sex` and `character` are left out.
+   */
+  npc?: number | string;
   race?: string | number;
   sex?: 'male' | 'female' | 0 | 1;
   /** Option name or id -> choice. Options left out keep the character's choice, or the first one. */
@@ -87,8 +95,14 @@ export const SIZES: Record<string, PictureSize> = {
 export interface Shot {
   raceId: number;
   sex: number;
+  /** The NPC drawn, when the spec names one. */
+  npc?: { displayId: number; creatureId?: number; name?: string; title?: string; scale: number };
   choices: Map<number, number>;
   gear: Map<Slot, ItemSummary>;
+  /** An NPC's gear by item look (ItemDisplayInfo id), in the slots `gear` leaves empty. */
+  wear: Map<Slot, number>;
+  /** The file of an NPC's painted body texture. */
+  bake?: number;
   /** The pose to build in. */
   pose: PoseRequest;
   /** An animation asked for by name, found once the model is read. */
@@ -117,6 +131,10 @@ export interface World {
   screens: LoadingScreen[];
   records: ImportedRecord[];
   maps: MapInfo[];
+  creatures: Creatures;
+  seen: SeenCreatures;
+  /** Whether a file of the build is on disk. */
+  installed: (fileId: number) => boolean;
 }
 
 const plain = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -187,6 +205,35 @@ function itemOf(equipment: Equipment, slot: Slot, ref: number | string): ItemSum
   }
   const { items } = equipment.search(slot, ref, 200);
   return byName(items.length > 0 ? items : equipment.search(slot, '', 12).items, ref, `${info.name.toLowerCase()} item`, (i) => i.name);
+}
+
+/** The display and, where known, the creature a spec's `npc` names. */
+function npcOf(world: World, ref: number | string): { display: CreatureDisplay; creature?: CachedCreature; fromCache: boolean } {
+  if (typeof ref === 'number') {
+    const display = world.creatures.display(ref);
+    if (!display) throw new Error(`There is no creature display ${ref} in the game data`);
+    return { display, fromCache: false };
+  }
+  const game: (CachedCreature & { source: 'game' | 'seen' })[] = world.creatures.creatures.map((c) => ({
+    id: c.id, name: c.name, title: c.title, displays: c.displays.map((d) => ({ ...d, probability: 1 })), source: 'game',
+  }));
+  const seen = world.seen.entries.filter((entry) => !game.some((c) => c.id === entry.id)).map((entry) => ({ ...entry, source: 'seen' as const }));
+  let creature: (typeof game)[number];
+  try {
+    creature = byName([...game, ...seen], ref, 'NPC', (c) => c.name);
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(
+      `${message} Names come from the game files' pets list and from NPCs this computer has seen in the game: stand near the NPC once with the game running, or give its display id.`,
+    );
+  }
+  // The game picks one of a creature's looks by chance; the first is the usual one.
+  const look = creature.displays.find((d) => d.probability > 0) ?? creature.displays[0];
+  if (!look) throw new Error(`${creature.name} has no display in the game data`);
+  const display = world.creatures.display(look.id);
+  if (!display) throw new Error(`${creature.name} is drawn with creature display ${look.id}, which is not in the game data`);
+  // The server's scale for the creature on top of the game data's scale for the model.
+  return { display: { ...display, scale: display.scale * (look.scale || 1) }, creature, fromCache: creature.source === 'seen' };
 }
 
 function recordOf(records: readonly ImportedRecord[], ref: string): ImportedRecord {
@@ -300,9 +347,44 @@ export function resolveSpec(spec: Spec, world: World): Shot {
   const notes: string[] = [];
   const choices = new Map<number, number>();
   const gear = new Map<Slot, ItemSummary>();
+  const wear = new Map<Slot, number>();
 
   let raceId: number | undefined;
   let sex: number | undefined;
+  let npc: Shot['npc'];
+  let bake: number | undefined;
+  /** The options a spec's `choices` may name: what the character screen offers, or for an NPC everything the model has. */
+  let optionsOf = (chrModelId: number) => offered(appearance.options(chrModelId));
+  if (spec.npc !== undefined) {
+    if (spec.race !== undefined || spec.sex !== undefined || spec.character !== undefined) {
+      throw new Error('An NPC is drawn as the game draws it; leave out "race", "sex" and "character"');
+    }
+    const { display, creature, fromCache } = npcOf(world, spec.npc);
+    const name = creature?.name ?? `Creature display ${display.id}`;
+    npc = { displayId: display.id, creatureId: creature?.id, name: creature?.name, title: creature?.title || undefined, scale: display.scale };
+    if (fromCache) notes.push(...world.seen.notes);
+    const { humanoid } = display;
+    if (!humanoid) throw new Error(`${name} is not built on a player model, which Mogshot cannot draw yet`);
+    raceId = humanoid.raceId;
+    sex = humanoid.sex;
+    const model = appearance.model(raceId, sex);
+    if (!model) throw new Error(`${name} is drawn as race ${raceId}, ${sex === 1 ? 'female' : 'male'}, which this build has no player model for`);
+    if (display.modelFileId !== model.fileId) {
+      problems.push(`The game draws ${name} with model file ${display.modelFileId}, not the player model (file ${model.fileId}) drawn here`);
+    }
+    for (const [option, choice] of humanoid.choices) choices.set(option, choice);
+    for (const [slot, displayId] of humanoid.wear) wear.set(slot, displayId);
+    optionsOf = (chrModelId) => appearance.options(chrModelId);
+    if (spec.choices) notes.push('Skin and face choices paint the body texture, which an NPC\'s painted body (the bake) replaces');
+    // The bake made for the model's texture size, if it is on disk; else the other one.
+    const hd = (appearance.skinSize(model)?.width ?? 0) >= 2048;
+    const [wanted, other] = hd ? [humanoid.hdBakeFileId, humanoid.bakeFileId] : [humanoid.bakeFileId, humanoid.hdBakeFileId];
+    if (wanted && world.installed(wanted)) bake = wanted;
+    else if (other && world.installed(other)) {
+      bake = other;
+      problems.push(`The ${hd ? 'high-res' : 'standard'} painted body of ${name} (file ${wanted || 'none listed'}) is not on disk, so the ${hd ? 'standard' : 'high-res'} one is drawn`);
+    } else if (wanted || other) problems.push(`No painted body of ${name} is on disk (files ${[wanted, other].filter(Boolean).join(', ')}); the skin is drawn from the choices instead`);
+  }
   if (spec.character !== undefined) {
     const imported = resolveImport(recordOf(world.records, spec.character), appearance, equipment);
     raceId = imported.raceId;
@@ -316,16 +398,18 @@ export function resolveSpec(spec: Spec, world: World): Shot {
   if (spec.sex !== undefined) sex = sexOf(spec.sex);
   // An empty place still needs a figure to frame the camera on; any will do.
   if (raceId === undefined && spec.place?.empty) raceId = appearance.races[0]?.id;
-  if (raceId === undefined) throw new Error('The spec names no race and no character');
-  const race = raceOf(appearance, raceId);
-  sex ??= race.sexes[0] ?? 0;
-  const model = appearance.model(race.id, sex);
-  if (!model) throw new Error(`${race.name} has no ${sex === 1 ? 'female' : 'male'} model in this build`);
+  if (raceId === undefined) throw new Error('The spec names no race, no character and no npc');
+  // An NPC can be built on a race no player can be; it has a number and no name.
+  const race = npc ? appearance.races.find((r) => r.id === raceId) : raceOf(appearance, raceId);
+  const raceName = race?.name ?? `race ${raceId}`;
+  sex ??= race?.sexes[0] ?? 0;
+  const model = appearance.model(raceId, sex);
+  if (!model) throw new Error(`${raceName} has no ${sex === 1 ? 'female' : 'male'} model in this build`);
 
-  const options = offered(appearance.options(model.chrModelId));
+  const options = optionsOf(model.chrModelId);
   for (const [name, ref] of Object.entries(spec.choices ?? {})) {
     const option = /^\d+$/.test(name) ? options.find((o) => o.id === Number(name)) : byName(options, name, 'appearance option', (o) => o.name);
-    if (!option) throw new Error(`${race.name} has no appearance option ${name}`);
+    if (!option) throw new Error(`${raceName} has no appearance option ${name}`);
     choices.set(option.id, choiceOf(option, ref));
   }
 
@@ -334,11 +418,15 @@ export function resolveSpec(spec: Spec, world: World): Shot {
     const sets = equipment.sets(info.id);
     if (sets.length === 0) throw new Error(`The game data has no sets for ${info.name}`);
     const set = spec.set.name === undefined ? sets[0]! : byName(sets, spec.set.name, `${info.name} set`, (s) => s.name);
-    for (const [slot, item] of [...set.pieces, ...set.weapons]) gear.set(slot, item);
+    for (const [slot, item] of [...set.pieces, ...set.weapons]) {
+      gear.set(slot, item);
+      wear.delete(slot);
+    }
   }
   for (const [slot, ref] of Object.entries(spec.gear ?? {}) as [Slot, number | string | null][]) {
     if (ref === null) gear.delete(slot);
     else gear.set(slot, itemOf(equipment, slot, ref));
+    wear.delete(slot);
   }
 
   let pose: PoseRequest = { preset: 'Stand' };
@@ -358,10 +446,13 @@ export function resolveSpec(spec: Spec, world: World): Shot {
   }
 
   return {
-    raceId: race.id,
+    raceId,
     sex,
+    npc,
     choices,
     gear,
+    wear,
+    bake,
     pose,
     animation,
     clip,

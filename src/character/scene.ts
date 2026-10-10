@@ -4,10 +4,10 @@ import { animKeyData } from '../formats/anim';
 import { type BoneOffsets, parseBoneFile } from '../formats/bone';
 import { BONE_BILLBOARD, type M2Model, parseM2, SEQUENCE_INLINE, VERTEX_SIZE } from '../formats/m2';
 import { parseSkin, type Skin } from '../formats/skin';
-import { identity, multiply } from '../math/mat4';
+import { identity, multiply, scaling } from '../math/mat4';
 import { animationName } from '../model/animation-names';
 import { findSequence, fingerBones, poseBones, resolveAlias } from '../model/pose';
-import type { Appearance, Option, TextureLayer } from './appearance';
+import { type Appearance, type Option, SLOT_SKIN, type TextureLayer } from './appearance';
 import { composite, type CompositeLayer } from './compositor';
 import type { Equipment, ItemLook, Slot } from './equipment';
 import { type PosePreset, posePresets } from './poses';
@@ -109,6 +109,12 @@ export interface CharacterRequest {
   choices?: ReadonlyMap<number, number>;
   /** Item ID worn in each slot. */
   gear?: ReadonlyMap<Slot, number>;
+  /** Item looks (ItemDisplayInfo ids) worn in slots `gear` leaves empty: an NPC's gear. */
+  wear?: ReadonlyMap<Slot, number>;
+  /** A body texture painted in advance (an NPC's bake), drawn in place of the skin the choices would composite. */
+  bake?: number;
+  /** The game's size for the model; 1 unless it says otherwise. */
+  scale?: number;
   /** Defaults to the Stand pose. */
   pose?: PoseRequest;
 }
@@ -139,6 +145,8 @@ const GROUP_KNEEPADS = 9;
 const GROUP_PANTS = 11;
 /** Position of the skirt (trousers group) in a chest item's geoset list. */
 const ROBE_SKIRT = 2;
+/** The compositor's blend mode that replaces what is under the layer. */
+const BLEND_BLIT = 1;
 /** Body texture sections of the upper and lower leg. */
 const LEG_SECTIONS = [5, 6];
 
@@ -301,6 +309,18 @@ export async function buildCharacterScene(
     if (look) worn.set(slot, look);
     else problems.push(`Item ${itemId} is not in the game data`);
   }
+  // An NPC's gear, by look rather than by item. A bake has its cloth painted on already.
+  const baked = new Set<Slot>();
+  for (const [slot, displayId] of request.wear ?? []) {
+    if (worn.has(slot)) continue;
+    const look = equipment?.lookByDisplay(displayId, slot, request.raceId, request.sex);
+    if (!look) {
+      problems.push(`Item display ${displayId} is not in the game data`);
+      continue;
+    }
+    worn.set(slot, look);
+    if (request.bake) baked.add(slot);
+  }
   // A robe: a chest item with a skirt. The skirt covers the legs, so boot tops, kneepads and
   // trouser legs are not drawn under it, and leg armour is not painted on it.
   const robe = (worn.get('chest')?.geosetGroup[ROBE_SKIRT] ?? 0) > 0;
@@ -320,13 +340,16 @@ export async function buildCharacterScene(
       resolved.geosets.push({ id: GROUP_PANTS * 100, visible: true });
     }
   }
+  const itemLayers = new Set<TextureLayer>();
   TEXTURE_ORDER.forEach((slot, order) => {
     const look = worn.get(slot);
-    if (!look) return;
+    if (!look || baked.has(slot)) return;
     for (const { section, fileId } of look.bodyTextures) {
       if (robe && (slot === 'legs' || slot === 'feet') && LEG_SECTIONS.includes(section)) continue;
       const layer = appearance.bodyLayer(characterModel, section, fileId, 1000 + order);
-      if (layer) resolved.layers.push(layer);
+      if (!layer) continue;
+      resolved.layers.push(layer);
+      itemLayers.add(layer);
     }
   });
   for (const look of worn.values()) {
@@ -348,6 +371,18 @@ export async function buildCharacterScene(
     return images.get(fileId);
   };
   const slots = new Map<number, Image>();
+  // A bake stands in for every skin layer the choices would paint; armour from items still goes over it.
+  if (request.bake) {
+    const picture = await image(request.bake, 'The painted body texture');
+    if (picture) {
+      const size = appearance.skinSize(characterModel) ?? { width: picture.width, height: picture.height };
+      resolved.layers = resolved.layers.filter((layer) => layer.textureType !== SLOT_SKIN || itemLayers.has(layer));
+      resolved.layers.push({
+        textureType: SLOT_SKIN, layer: -1, blendMode: BLEND_BLIT, fileId: request.bake,
+        canvasWidth: size.width, canvasHeight: size.height, x: 0, y: 0, width: size.width, height: size.height,
+      });
+    }
+  }
   // Armour is painted over the skin: its layers sort after every appearance layer.
   resolved.layers.sort((a, b) => a.textureType - b.textureType || a.layer - b.layer);
   for (const type of new Set(resolved.layers.map((layer) => layer.textureType))) {
@@ -555,6 +590,7 @@ export async function buildCharacterScene(
     return inline(holder) || storage.files.find(animFileOf(holder)) !== undefined;
   };
 
+  const scale = request.scale ?? 1;
   const pose = async (sequence: number, time: number, preset?: string): Promise<PoseResult> => {
     const holder = model.sequences[sequence] ? resolveAlias(model.sequences, sequence) : -1;
     if (holder >= 0 && !inline(holder) && !anims.has(holder)) {
@@ -576,6 +612,8 @@ export async function buildCharacterScene(
         meshBones = follows.own.slice();
         transform = attachmentMatrix(model, bones, follows.attachment) ?? transform;
       }
+      // The game's size for the model, about the feet, so a scaled character still stands on the ground.
+      if (scale !== 1) transform = multiply(new Float32Array(16), scaling(scale), transform);
       growBounds(min, max, mesh.vertices, meshSkin, visible, meshBones, transform);
       return { bones: meshBones, transform };
     });

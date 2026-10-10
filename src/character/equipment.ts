@@ -557,9 +557,23 @@ export class Equipment {
   /** What wearing an item does to a race and sex, or undefined if the item is unknown. */
   look(itemId: number, slot: Slot, race: number, sex: number): ItemLook | undefined {
     const item = this.items.get(itemId) ?? this.unnamed.get(itemId);
-    const display = this.displays.get(this.displayOfItem.get(itemId) ?? 0);
-    if (!item || !display) return undefined;
-    const displayId = this.displayOfItem.get(itemId)!;
+    const displayId = this.displayOfItem.get(itemId);
+    if (!item || displayId === undefined) return undefined;
+    return this.lookByDisplay(displayId, slot, race, sex, item);
+  }
+
+  /**
+   * What wearing an item look (an ItemDisplayInfo row, which NPC gear is given as) does to a
+   * race and sex, or undefined if the look is unknown. Without an item it is called
+   * `Display N`, is armour of the slot's first kind, and has no weapon kind.
+   */
+  lookByDisplay(displayId: number, slot: Slot, race: number, sex: number, item?: ItemSummary): ItemLook | undefined {
+    const display = this.displays.get(displayId);
+    if (!display) return undefined;
+    // Only a real item has a class and subclass; a bare look is worn as armour.
+    const kind = item && this.itemClass.get(item.id);
+    const inventoryType = SLOTS.find((s) => s.id === slot)?.inventoryTypes[0] ?? 0;
+    item ??= { id: displayId, name: `Display ${displayId}`, quality: 1, inventoryType, iconFileId: 0 };
     const fallback = this.fallbacks.get(`${race}:${sex}`);
 
     const texture = (material: number): number | undefined => {
@@ -600,7 +614,6 @@ export class Equipment {
     const byRace = this.helmetHide.get(vis);
     const hideGroups = byRace?.get(race) ?? (fallback ? byRace?.get(fallback.model.race) : undefined) ?? [];
 
-    const kind = this.itemClass.get(itemId);
     return {
       item,
       geosetGroup: display.geosetGroup,

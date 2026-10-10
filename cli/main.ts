@@ -18,7 +18,8 @@ const HELP = `Mogshot from the command line: World of Warcraft characters as PNG
   mogshot render <spec.json | ->       draw the spec, or each spec of an array; "-" reads standard input
   mogshot races                        races, their sexes and classes
   mogshot options <race> <sex>         appearance options and their choices
-  mogshot poses <race> <sex>           curated poses, and every animation the model has
+  mogshot poses <race> <sex>           curated poses, and every animation the model has; or poses npc <display id>
+  mogshot npcs [words]                 NPCs the game can name whose name has the words, with their display ids
   mogshot items <slot> [words]         items for a slot whose name has the words
   mogshot sets <class>                 the class's sets, best first, with the weapons that go with each
   mogshot backdrops                    gradients and loading screens
@@ -27,12 +28,15 @@ const HELP = `Mogshot from the command line: World of Warcraft characters as PNG
 
   --wow <folder>   the game folder (or WOW_DIR; default /Applications/World of Warcraft)
 
-Everything is printed as JSON. A spec, with every field but a race or a character optional:
+Everything is printed as JSON. A spec, with every field but a race, a character or an npc optional:
 
   {
     "out": "hunter.png",                          relative to the spec file
     "character": "Rambleon",                      a saved character or a pasted MOG code, as the starting point
     "race": "Night Elf", "sex": "female",
+    "npc": 7274,                                  a creature display id, or an NPC's name where the game knows it (mogshot npcs);
+                                                  drawn as the game draws it, so leave out race, sex and character. "gear" and
+                                                  "set" replace its gear slot by slot, "choices" its look
     "choices": { "Hair Style": 4, "Face": "…" },  option -> choice by place in the list (from 1), name, or {"id": n}
     "set": { "class": "Hunter", "name": "Giantstalker" },   without a name, the class's best set
     "gear": { "head": 16939, "mainHand": "Rhok'delar", "back": null },   id, name, or null to leave empty
@@ -123,9 +127,38 @@ export async function run(argv: string[], host: Host): Promise<number> {
       return 0;
     }
     case 'poses': {
+      if (rest[0] === 'npc') {
+        if (!/^\d+$/.test(rest[1] ?? '')) throw new Error('Usage: mogshot poses npc <display id>');
+        const world = await worldOf(session);
+        const shot = resolveSpec({ npc: Number(rest[1]) }, world);
+        const { scene } = await build(shot, session, world);
+        print({ poses: scene.presets.map((p) => p.name), animations: [...new Set(scene.animations.map((a) => a.name))] });
+        return 0;
+      }
       const { appearance, race, sex } = await modelOf();
       const { scene } = await buildCharacterScene(session.storage, appearance, undefined, { raceId: race.id, sex });
       print({ poses: scene.presets.map((p) => p.name), animations: [...new Set(scene.animations.map((a) => a.name))] });
+      return 0;
+    }
+    case 'npcs': {
+      const [creatures, seen] = await Promise.all([session.creatures(), session.creatureCache()]);
+      const words = rest.join(' ').toLowerCase().split(/\s+/).filter(Boolean);
+      const known = creatures.creatures.map((c) => ({ id: c.id, name: c.name, title: c.title, displays: c.displays, source: 'game' as const }));
+      const ids = new Set(known.map((c) => c.id));
+      const list = [
+        ...known,
+        ...seen.entries
+          .filter((entry) => !ids.has(entry.id))
+          .map((entry) => ({ id: entry.id, name: entry.name, title: entry.title, displays: entry.displays.map(({ id, scale }) => ({ id, scale })), source: 'seen' as const })),
+      ].filter((npc) => words.every((word) => npc.name.toLowerCase().includes(word)));
+      print({
+        total: list.length,
+        npcs: list.slice(0, 60),
+        ...(seen.notes.length > 0 && { notes: seen.notes }),
+        ...(list.length === 0 && {
+          hint: 'Names come from the game files\' pets list and from NPCs this computer has seen in the game: stand near the NPC once with the game running, or give its display id',
+        }),
+      });
       return 0;
     }
     case 'items': {
@@ -180,10 +213,7 @@ async function render(file: string | undefined, session: Session, host: Host): P
   const specs = Array.isArray(parsed) ? parsed : [parsed];
   const base = file === '-' ? process.cwd() : dirname(resolve(file));
 
-  const [appearance, equipment, classes, screens, records, maps] = await Promise.all([
-    session.appearance(), session.equipment(), session.classes(), session.screens(), session.records(), session.maps(),
-  ]);
-  const world: World = { appearance, equipment, classes, screens, records, maps };
+  const world = await worldOf(session);
 
   let room: Darkroom | undefined;
   let failed = 0;
@@ -216,10 +246,15 @@ async function render(file: string | undefined, session: Session, host: Host): P
           height: drawn.height,
           ...(clip && { clip: { kind: CLIP_FORMATS[clip.format].name, animation: clip.animation, frames: clip.poses.length, fps: clip.fps, length: Number((clip.poses.length / clip.fps).toFixed(2)) } }),
           seconds: Number(((performance.now() - start) / 1000).toFixed(1)),
-          race: raceOf(appearance, shot.raceId).name,
+          ...(shot.npc && { npc: { id: shot.npc.displayId, name: shot.npc.name, title: shot.npc.title, creature: shot.npc.creatureId, scale: shot.npc.scale } }),
+          // An NPC can be built on a race no player can be.
+          race: world.appearance.races.find((r) => r.id === shot.raceId)?.name ?? `Race ${shot.raceId}`,
           sex: sexName(shot.sex),
           pose: scene.pose.preset ?? scene.animations.find((a) => a.sequence === scene.pose.sequence)?.name,
-          gear: Object.fromEntries([...shot.gear].map(([slot, item]) => [slot, `${item.name} (${item.id})`])),
+          gear: Object.fromEntries([
+            ...[...shot.gear].map(([slot, item]) => [slot, `${item.name} (${item.id})`]),
+            ...[...shot.wear].map(([slot, displayId]) => [slot, `Display ${displayId}`]),
+          ]),
           ...(place && { place: { ground: place.ground.map((n) => Number(n.toFixed(2))), ground_tiles: place.terrain.length, parts: place.meshes.length, props: place.instances.length, propKinds: place.props.length } }),
           problems: [...shot.problems, ...scene.problems, ...(place?.problems ?? []), ...drawn.problems],
           notes: shot.notes,
@@ -237,6 +272,14 @@ async function render(file: string | undefined, session: Session, host: Host): P
   return failed > 0 ? 1 : 0;
 }
 
+/** Everything a spec's names are placed against. */
+async function worldOf(session: Session): Promise<World> {
+  const [appearance, equipment, classes, screens, records, maps, creatures, seen] = await Promise.all([
+    session.appearance(), session.equipment(), session.classes(), session.screens(), session.records(), session.maps(), session.creatures(), session.creatureCache(),
+  ]);
+  return { appearance, equipment, classes, screens, records, maps, creatures, seen, installed: (fileId) => session.storage.files.find(fileId) !== undefined };
+}
+
 /** Build the shot's character in its pose. */
 async function build(shot: Shot, session: Session, world: World): Promise<{ scene: CharacterScene; rig: CharacterRig }> {
   const { scene, rig } = await buildCharacterScene(session.storage, world.appearance, world.equipment, {
@@ -244,6 +287,9 @@ async function build(shot: Shot, session: Session, world: World): Promise<{ scen
     sex: shot.sex,
     choices: shot.choices,
     gear: new Map([...shot.gear].map(([slot, item]) => [slot, item.id])),
+    wear: shot.wear,
+    bake: shot.bake,
+    scale: shot.npc?.scale,
     pose: shot.pose,
   });
   // The scene falls back to Stand for a pose the model cannot strike; a picture in the wrong pose is not what was asked for.

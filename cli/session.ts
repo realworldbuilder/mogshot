@@ -3,10 +3,12 @@ import { join } from 'node:path';
 import { CascStorage } from '../src/casc/storage';
 import { Appearance } from '../src/character/appearance';
 import { type LoadingScreen, loadLoadingScreens } from '../src/character/backdrops';
+import { Creatures } from '../src/character/creatures';
 import { type ClassInfo, Equipment } from '../src/character/equipment';
 import { Database } from '../src/db2/database';
 import { Definitions } from '../src/db2/definitions';
 import { decodeBlp, type Image } from '../src/formats/blp';
+import { type CachedCreature, parseCreatureCache } from '../src/import/creature-cache';
 import { type ImportedRecord, mergeRecords, recordsFromSavedVariables } from '../src/import/record';
 import { NodeSource } from '../src/io/node-source';
 import { FileCache } from './file-cache';
@@ -19,6 +21,13 @@ export interface MapInfo {
   wdtFileId: number;
 }
 
+/** The NPCs the game has shown this computer, read from the client's creature cache files. */
+export interface SeenCreatures {
+  entries: CachedCreature[];
+  /** Anything about the files worth saying: a cache from another build, for one. */
+  notes: string[];
+}
+
 /** An open game folder and what has been read from it so far. The command line's counterpart of the page's data worker. */
 export class Session {
   private appearancePromise: Promise<Appearance> | undefined;
@@ -26,6 +35,8 @@ export class Session {
   private screensPromise: Promise<LoadingScreen[]> | undefined;
   private recordsPromise: Promise<ImportedRecord[]> | undefined;
   private mapsPromise: Promise<MapInfo[]> | undefined;
+  private creaturesPromise: Promise<Creatures> | undefined;
+  private seenPromise: Promise<SeenCreatures> | undefined;
 
   private constructor(
     readonly dir: string,
@@ -69,6 +80,49 @@ export class Session {
         return [{ id: Number(row.ID), name: String(row.MapName_lang), directory: String(row.Directory), wdtFileId }];
       }),
     ));
+  }
+
+  creatures(): Promise<Creatures> {
+    return (this.creaturesPromise ??= Creatures.load(this.database));
+  }
+
+  /**
+   * The NPCs this computer has seen in the game, from every product's creature cache: the
+   * install's locale first, else whatever locales the cache folder has. A cache written by
+   * another build is kept, with a note, since names and display ids rarely change.
+   */
+  creatureCache(): Promise<SeenCreatures> {
+    return (this.seenPromise ??= (async () => {
+      const build = Number(this.storage.info.version.split('.').pop());
+      const seen: SeenCreatures = { entries: [], notes: [] };
+      const ids = new Set<number>();
+      for (const product of await names(this.dir)) {
+        if (!/^_.+_$/.test(product)) continue;
+        const wdb = join(this.dir, product, 'Cache', 'WDB');
+        const locales = (await names(wdb)).includes(this.storage.info.locale) ? [this.storage.info.locale] : await names(wdb);
+        for (const locale of locales) {
+          const path = join(wdb, locale, 'creaturecache.wdb');
+          let bytes: Uint8Array;
+          try {
+            bytes = await readFile(path);
+          } catch {
+            continue;
+          }
+          try {
+            const cache = parseCreatureCache(bytes);
+            if (cache.build !== build) seen.notes.push(`${path} was written by build ${cache.build}, not ${build}; its NPC names may be out of date`);
+            for (const entry of cache.entries) {
+              if (ids.has(entry.id)) continue;
+              ids.add(entry.id);
+              seen.entries.push(entry);
+            }
+          } catch (cause) {
+            seen.notes.push(`${path} could not be read: ${cause instanceof Error ? cause.message : String(cause)}`);
+          }
+        }
+      }
+      return seen;
+    })());
   }
 
   /** Every class some race can be. */

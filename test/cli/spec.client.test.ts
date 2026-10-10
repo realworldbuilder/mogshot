@@ -18,8 +18,10 @@ describe.skipIf(!hasClient)('a spec', () => {
 
   beforeAll(async () => {
     const session = await Session.open(WOW_DIR, join(ROOT, 'node_modules', '.cache', 'mogshot', 'cli'));
-    const [appearance, equipment, classes, screens] = await Promise.all([session.appearance(), session.equipment(), session.classes(), session.screens()]);
-    world = { appearance, equipment, classes, screens, records: [], maps: await session.maps() };
+    const [appearance, equipment, classes, screens, maps, creatures, seen] = await Promise.all([
+      session.appearance(), session.equipment(), session.classes(), session.screens(), session.maps(), session.creatures(), session.creatureCache(),
+    ]);
+    world = { appearance, equipment, classes, screens, records: [], maps, creatures, seen, installed: (fileId) => session.storage.files.find(fileId) !== undefined };
   }, 120_000);
 
   it('places names: race, set, item, choice, size, gradient', () => {
@@ -47,9 +49,30 @@ describe.skipIf(!hasClient)('a spec', () => {
     expect(() => resolveSpec({ race: 'Orc', choices: { 'Skin Color': 99 } }, world)).toThrow(/Skin Color has choices 1 to/);
     expect(() => resolveSpec({ race: 'Orc', size: 'huge' }, world)).toThrow(/no size called "huge"/);
     expect(() => resolveSpec({ race: 'Orc', character: 'Nobody' }, world)).toThrow(/addon has saved none/);
-    expect(() => resolveSpec({}, world)).toThrow(/no race and no character/);
+    expect(() => resolveSpec({}, world)).toThrow(/no race, no character and no npc/);
     expect(() => resolveSpec({ race: 'Orc', place: { map: 'Narnia', x: 0, y: 0 } }, world)).toThrow(/no map called "Narnia"/);
     expect(resolveSpec({ race: 'Orc', place: { map: 'Kalimdor', x: 1, y: 2, facing: 90 } }, world).place).toMatchObject({ x: 1, y: 2, reach: 300 });
+  });
+
+  it('places an NPC by display id: its race, sex, gear and painted body', () => {
+    const shot = resolveSpec({ npc: 7274 }, world);
+    expect(shot.raceId).toBe(4);
+    expect(shot.sex).toBe(1);
+    expect(shot.npc).toMatchObject({ displayId: 7274, scale: 1 });
+    expect(shot.wear.size).toBe(4);
+    expect(shot.bake).toBeGreaterThan(0);
+    expect(shot.choices.get(8529)).toBe(54371);
+    expect(shot.problems).toEqual([]);
+    // Spec gear replaces the NPC's in that slot; null empties it.
+    const dressed = resolveSpec({ npc: 7274, gear: { head: 22418, legs: null } }, world);
+    expect(dressed.wear.has('head')).toBe(false);
+    expect(dressed.wear.has('legs')).toBe(false);
+    expect(dressed.gear.get('head')?.id).toBe(22418);
+    expect(() => resolveSpec({ npc: 7274, race: 'Orc' }, world)).toThrow(/leave out "race", "sex" and "character"/);
+    expect(() => resolveSpec({ npc: 'Nobody Anywhere' }, world)).toThrow(/no NPC called "Nobody Anywhere".*Mechanical Squirrel.*display id/);
+    expect(() => resolveSpec({ npc: 999999999 }, world)).toThrow(/no creature display 999999999/);
+    // A name the game files know, whose look has no player model behind it.
+    expect(() => resolveSpec({ npc: 'Mechanical Squirrel' }, world)).toThrow(/Mechanical Squirrel is not built on a player model/);
   });
 
   it('is drawn to a PNG by the command line', async () => {
@@ -63,6 +86,7 @@ describe.skipIf(!hasClient)('a spec', () => {
         { out: 'bad.png', race: 'Tauren', sex: 'male', pose: 'Moonwalk' },
         { out: 'titled.png', race: 'Tauren', sex: 'male', pose: { animation: 'EmoteDance', at: 0.3 }, size: { width: 640, height: 360 }, backdrop: 'Frost', title: { text: 'Moo', sub: 'of Thunder Bluff' } },
         { out: 'untitled.png', race: 'Human', sex: 'female', title: 'Left off' },
+        { out: 'tyrande.png', npc: 7274, pose: 'Cast', size: { width: 600, height: 800, tight: true } },
       ]),
     );
     const { stdout } = await promisify(execFile)('node', [join(ROOT, 'bin', 'mogshot.mjs'), 'render', join(dir, 'shots.json'), '--wow', WOW_DIR]).catch(
@@ -72,7 +96,7 @@ describe.skipIf(!hasClient)('a spec', () => {
         return error;
       },
     );
-    const [tight, backdrop, bad, titled, untitled] = JSON.parse(stdout) as { width: number; height: number; problems: string[]; pose: string; error?: string }[];
+    const [tight, backdrop, bad, titled, untitled, tyrande] = JSON.parse(stdout) as { width: number; height: number; problems: string[]; pose: string; error?: string; npc?: { id: number }; gear: Record<string, string> }[];
 
     expect(tight!.problems).toEqual([]);
     const cut = decodePng(new Uint8Array(await readFile(join(dir, 'tight.png'))));
@@ -106,6 +130,15 @@ describe.skipIf(!hasClient)('a spec', () => {
 
     // A tight crop is saved without its title, and says so.
     expect(untitled!.problems.join(' ')).toMatch(/tight crop has no room for a title/);
+
+    // An NPC, drawn as the game draws her, in a pose of the player model.
+    expect(tyrande!.problems).toEqual([]);
+    expect(tyrande!.npc).toEqual({ id: 7274, scale: 1 });
+    expect(tyrande!.pose).toBe('Cast');
+    expect(tyrande!.gear).toEqual({ head: 'Display 24525', shirt: 'Display 25537', legs: 'Display 25538', hands: 'Display 24922' });
+    const priestess = decodePng(new Uint8Array(await readFile(join(dir, 'tyrande.png'))));
+    expect(Math.max(priestess.width, priestess.height)).toBe(800);
+    expect(alphaBounds(priestess)!.height).toBeGreaterThan(700);
   }, 120_000);
 
   it('films a looping clip as video, GIF and PNG frames', async () => {

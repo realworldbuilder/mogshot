@@ -84,7 +84,7 @@ interface Element {
 
 const OPTION_HIDDEN = 0x20;
 /** The model texture slot of the body skin. */
-const SLOT_SKIN = 1;
+export const SLOT_SKIN = 1;
 const BLEND_ALPHA = 15;
 const REQ_PLAYER = 0x1;
 /** Bit of an ordinary class (warrior). A choice that excludes it is for special classes only. */
@@ -269,6 +269,11 @@ export class Appearance {
   /** The model's appearance options in the game's order, each with its choices. Includes hidden ones. */
   options(chrModelId: number): Option[] {
     return this.optionsByModel.get(chrModelId) ?? [];
+  }
+
+  /** The full size of the model's body skin texture, as the game data gives it. */
+  skinSize(model: CharacterModel): { width: number; height: number } | undefined {
+    return this.slotSizes.get(`${model.layoutId}:${SLOT_SKIN}`);
   }
 
   /** The first available choice of every option. */
