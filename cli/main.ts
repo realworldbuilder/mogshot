@@ -12,12 +12,16 @@ import { Darkroom } from './browser';
 import type { Job } from './job';
 import { Session } from './session';
 import { byName, classOf, offered, raceOf, resolveSpec, sexOf, SIZES, type Shot, type Spec, type World } from './spec';
+import { exportGlb } from './gltf';
 import { pack } from './wire';
 
 const HELP = `Mogshot from the command line: World of Warcraft characters as PNG files and looping clips.
 
   mogshot render <spec.json | ->       draw the spec, or each spec of an array; "-" reads standard input
-  mogshot races                        races, their sexes and classes
+  mogshot export <spec.json>           the spec's character as a glTF binary (.glb) for Blender: meshes, textures,
+                                       skeleton and animations. Same spec; "out" ends .glb, "animations" names the
+                                       animations to bake (a list, or "all"; default the pose's own and Stand), "fps" 30
+  mogshot races                      races, their sexes and classes
   mogshot options <race> <sex>         appearance options and their choices
   mogshot poses <race> <sex>           curated poses, and every animation the model has; or poses npc <display id>
   mogshot npcs [words]                 NPCs the game can name whose name has the words, with their display ids
@@ -198,6 +202,8 @@ export async function run(argv: string[], host: Host): Promise<number> {
     }
     case 'render':
       return render(rest[0], session, host);
+    case 'export':
+      return exportCommand(rest[0], session);
     default:
       throw new Error(`There is no command "${command}". Run mogshot help.`);
   }
@@ -271,6 +277,62 @@ async function render(file: string | undefined, session: Session, host: Host): P
     await room?.close();
   }
   print(pictures);
+  return failed > 0 ? 1 : 0;
+}
+
+/** A spec with the two fields an export adds to a shot. */
+type ExportSpec = Spec & { animations?: string[] | 'all'; fps?: number };
+
+async function exportCommand(file: string | undefined, session: Session): Promise<number> {
+  if (!file) throw new Error('Usage: mogshot export <spec.json>');
+  const text = await readFile(file, 'utf8');
+  let parsed: ExportSpec | ExportSpec[];
+  try {
+    parsed = JSON.parse(text) as ExportSpec | ExportSpec[];
+  } catch (cause) {
+    throw new Error(`${file} is not JSON: ${messageOf(cause)}`);
+  }
+  const specs = Array.isArray(parsed) ? parsed : [parsed];
+  const base = dirname(resolve(file));
+  const world = await worldOf(session);
+  let failed = 0;
+  const files: unknown[] = [];
+  for (const [index, { animations: wanted, fps = 30, ...spec }] of specs.entries()) {
+    const out = resolve(base, spec.out ?? `mogshot-${index + 1}.glb`);
+    const start = performance.now();
+    try {
+      if (!out.endsWith('.glb')) throw new Error('An export\'s "out" ends .glb');
+      const shot = resolveSpec(spec, world);
+      const { scene, rig } = await build(shot, session, world);
+      // Animations are baked by sequence, so a name that has variations bakes each of them.
+      const posed = scene.animations.find((a) => a.sequence === scene.pose.sequence);
+      const chosen =
+        wanted === 'all'
+          ? scene.animations
+          : wanted
+            ? wanted.flatMap((name) => {
+                const all = scene.animations.filter((a) => a.name.toLowerCase() === name.toLowerCase());
+                if (all.length === 0) byName(scene.animations, name, 'animation', (a) => a.name); // throws with the list
+                return all.length > 0 ? [all[0]!] : [];
+              })
+            : [...new Map([posed, scene.animations.find((a) => a.name === 'Stand')].filter((a): a is NonNullable<typeof a> => a !== undefined).map((a) => [a.sequence, a])).values()];
+      const name = shot.npc?.name ?? [world.appearance.races.find((r) => r.id === shot.raceId)?.name, shot.sex !== undefined && sexName(shot.sex)].filter(Boolean).join(' ') ?? 'character';
+      const { glb, report } = await exportGlb(scene, rig, { name, animations: chosen, fps });
+      await mkdir(dirname(out), { recursive: true });
+      await writeFile(out, glb);
+      files.push({
+        out,
+        bytes: glb.byteLength,
+        ...report,
+        seconds: Number(((performance.now() - start) / 1000).toFixed(1)),
+        problems: [...shot.problems, ...scene.problems],
+      });
+    } catch (cause) {
+      failed++;
+      files.push({ out, error: messageOf(cause) });
+    }
+  }
+  print(files);
   return failed > 0 ? 1 : 0;
 }
 

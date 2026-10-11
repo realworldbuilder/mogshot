@@ -71,6 +71,12 @@ A spec names a race and sex, a character the addon saved, or an NPC (a creature 
 
 Node reads the game folder (`--wow <folder>` or `WOW_DIR`, default `/Applications/World of Warcraft`) and builds the character; installed Chrome, run without a window, draws it with the page's own renderer. Tried on one Mac only. A first run reads the install's index; after that a picture takes one to three seconds.
 
+```
+pnpm mogshot export shots.json
+```
+
+The same spec with `"out"` ending `.glb` writes the character as a glTF binary for Blender and other 3D tools: the meshes with the textures Mogshot composited (skin, hair and gear baked), a skeleton, and animations baked frame by frame from the poses the renderer draws. `"animations"` names the ones to bake (a list, or `"all"`; without it, the pose's own and Stand), `"fps"` the rate (30). Only the vertices the character draws are kept. The skeleton is flat (every bone a root, as the game's matrices are), so a tool poses the model exactly as Mogshot does but has no parent chain to drag by hand. Blender's built-in glTF importer reads it; no add-on. A character with eight animations is about 7 MB and takes under a second.
+
 ## Development
 
 ```bash
