@@ -11,6 +11,9 @@ import { GRADIENTS } from '../src/render/backdrop';
 import { Darkroom } from './browser';
 import type { Job } from './job';
 import { Session } from './session';
+import { remoteFolder, SshSource } from './ssh-source';
+import { listProducts } from '../src/casc/storage';
+import { NodeSource } from '../src/io/node-source';
 import { byName, classOf, offered, raceOf, resolveSpec, sexOf, SIZES, type Shot, type Spec, type World } from './spec';
 import { exportGlb } from './gltf';
 import { pack } from './wire';
@@ -30,8 +33,12 @@ const HELP = `Mogshot from the command line: World of Warcraft characters as PNG
   mogshot backdrops                    gradients and loading screens
   mogshot sizes                        the sizes that have names
   mogshot characters                   characters the Mogshot addon saved in the game folder
+  mogshot products                     the games installed in the folder, with their versions
 
-  --wow <folder>   the game folder (or WOW_DIR; default /Applications/World of Warcraft)
+  --wow <folder>     the game folder (or WOW_DIR; default /Applications/World of Warcraft); host:/folder reads
+                     one on another computer through ssh, e.g. williams-macbook-pro-2:/Applications/World of Warcraft
+  --product <name>   which of the folder's games to read (or WOW_PRODUCT): wow is retail, wow_classic_beta the
+                     classic beta; default the first active one in .build.info. mogshot products lists them
 
 Everything is printed as JSON. A spec, with every field but a race, a character or an npc optional:
 
@@ -90,6 +97,13 @@ export async function run(argv: string[], host: Host): Promise<number> {
     if (!dir) throw new Error('--wow needs a folder');
     wow = dir;
   }
+  let product = process.env.WOW_PRODUCT || undefined;
+  const productFlag = args.indexOf('--product');
+  if (productFlag >= 0) {
+    const [, name] = args.splice(productFlag, 2);
+    if (!name) throw new Error('--product needs a name, e.g. wow or wow_classic_beta');
+    product = name;
+  }
   const [command, ...rest] = args;
   if (!command || command === 'help' || command === '--help' || command === '-h') {
     console.log(HELP);
@@ -99,8 +113,14 @@ export async function run(argv: string[], host: Host): Promise<number> {
     print(SIZES);
     return 0;
   }
-  if (!existsSync(join(wow, '.build.info'))) throw new Error(`${wow} is not a World of Warcraft folder. Pass --wow <folder> or set WOW_DIR.`);
-  const session = await Session.open(wow, join(host.root, 'node_modules', '.cache', 'mogshot', 'cli'));
+  if (!remoteFolder(wow) && !existsSync(join(wow, '.build.info'))) throw new Error(`${wow} is not a World of Warcraft folder. Pass --wow <folder> or set WOW_DIR.`);
+  if (command === 'products') {
+    const remote = remoteFolder(wow);
+    const source = remote ? new SshSource(remote.host, remote.root) : new NodeSource(wow);
+    print((await listProducts(source)).map((entry) => ({ product: entry.product, version: entry.version, active: entry.active })));
+    return 0;
+  }
+  const session = await Session.open(wow, join(host.root, 'node_modules', '.cache', 'mogshot', 'cli'), product);
 
   /** The model named by `<race> <sex>` arguments. */
   const modelOf = async () => {

@@ -1,4 +1,3 @@
-import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CascStorage } from '../src/casc/storage';
 import { Appearance } from '../src/character/appearance';
@@ -10,8 +9,10 @@ import { Definitions } from '../src/db2/definitions';
 import { decodeBlp, type Image } from '../src/formats/blp';
 import { type CachedCreature, parseCreatureCache } from '../src/import/creature-cache';
 import { type ImportedRecord, mergeRecords, recordsFromSavedVariables } from '../src/import/record';
+import { type ByteSource, readText } from '../src/io/byte-source';
 import { NodeSource } from '../src/io/node-source';
 import { FileCache } from './file-cache';
+import { CachedSource, remoteFolder, SshSource } from './ssh-source';
 
 /** A map of the game world: a continent, or an instance with its own outdoors. */
 export interface MapInfo {
@@ -39,20 +40,28 @@ export class Session {
   private seenPromise: Promise<SeenCreatures> | undefined;
 
   private constructor(
-    readonly dir: string,
+    readonly source: ByteSource,
     readonly storage: CascStorage,
     private readonly database: Database,
   ) {}
 
-  static async open(dir: string, cacheDir: string): Promise<Session> {
+  /**
+   * Opens a game folder: a path on this computer, or "host:/path" for one on another computer
+   * reached by ssh. `product` picks one of the folder's products (wow, wow_classic_beta, ...).
+   */
+  static async open(location: string, cacheDir: string, product?: string): Promise<Session> {
     const cache = new FileCache(cacheDir);
-    const storage = await CascStorage.open(new NodeSource(dir), { cache });
+    const remote = remoteFolder(location);
+    const source = remote
+      ? new CachedSource(new SshSource(remote.host, remote.root), join(cacheDir, 'remote', remote.host))
+      : new NodeSource(location);
+    const storage = await CascStorage.open(source, { cache, product });
     const definitions = new Definitions(async (url) => {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`${url} answered ${response.status}`);
       return response.text();
     }, cache);
-    return new Session(dir, storage, new Database(storage, definitions));
+    return new Session(source, storage, new Database(storage, definitions));
   }
 
   appearance(): Promise<Appearance> {
@@ -96,15 +105,15 @@ export class Session {
       const build = Number(this.storage.info.version.split('.').pop());
       const seen: SeenCreatures = { entries: [], notes: [] };
       const ids = new Set<number>();
-      for (const product of await names(this.dir)) {
+      for (const product of await this.source.list('')) {
         if (!/^_.+_$/.test(product)) continue;
-        const wdb = join(this.dir, product, 'Cache', 'WDB');
-        const locales = (await names(wdb)).includes(this.storage.info.locale) ? [this.storage.info.locale] : await names(wdb);
+        const wdb = `${product}/Cache/WDB`;
+        const locales = (await this.source.list(wdb)).includes(this.storage.info.locale) ? [this.storage.info.locale] : await this.source.list(wdb);
         for (const locale of locales) {
-          const path = join(wdb, locale, 'creaturecache.wdb');
+          const path = `${wdb}/${locale}/creaturecache.wdb`;
           let bytes: Uint8Array;
           try {
-            bytes = await readFile(path);
+            bytes = await this.source.read(path);
           } catch {
             continue;
           }
@@ -137,12 +146,12 @@ export class Session {
   records(): Promise<ImportedRecord[]> {
     return (this.recordsPromise ??= (async () => {
       const lists: ImportedRecord[][] = [];
-      for (const product of await names(this.dir)) {
+      for (const product of await this.source.list('')) {
         if (!/^_.+_$/.test(product)) continue;
-        const accounts = join(this.dir, product, 'WTF', 'Account');
-        for (const account of await names(accounts)) {
+        const accounts = `${product}/WTF/Account`;
+        for (const account of await this.source.list(accounts)) {
           try {
-            lists.push(recordsFromSavedVariables(await readFile(join(accounts, account, 'SavedVariables', 'Mogshot.lua'), 'utf8')));
+            lists.push(recordsFromSavedVariables(await readText(this.source, `${accounts}/${account}/SavedVariables/Mogshot.lua`)));
           } catch {
             // this account has no file from the addon
           }
@@ -156,13 +165,5 @@ export class Session {
   async image(fileId: number): Promise<Image | undefined> {
     const file = await this.storage.readFile(fileId);
     return file && decodeBlp(file.data);
-  }
-}
-
-async function names(dir: string): Promise<string[]> {
-  try {
-    return await readdir(dir);
-  } catch {
-    return [];
   }
 }

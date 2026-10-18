@@ -83,7 +83,12 @@ export class CascStorage {
     const entry = options.product
       ? products.find((p) => p.product === options.product)
       : (products.find((p) => p.active) ?? products[0]);
-    if (!entry) throw new InstallError('No installed product found in .build.info.');
+    if (!entry) {
+      const names = products.map((p) => p.product).join(', ');
+      throw new InstallError(
+        options.product ? `This folder has no ${options.product}; it has ${names || 'nothing installed'}.` : 'No installed product found in .build.info.',
+      );
+    }
     const locale = localeFromTags(entry.tags) ?? 'enUS';
     const localeFlag = LOCALE_FLAGS[locale]!;
 
