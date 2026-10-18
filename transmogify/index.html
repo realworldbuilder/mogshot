@@ -46,16 +46,19 @@
         <ol id="set-list" class="set-list"></ol>
       </section>
 
-      <section>
-        <h2>Slots</h2>
-        <ol id="slots" class="slots"></ol>
-      </section>
     </aside>
 
     <main class="stage" id="stage">
       <div class="picture" id="picture">
         <img id="preview" alt="">
         <canvas id="live" aria-label="The character: drag to turn, scroll or pinch to zoom"></canvas>
+        <div class="paperdoll" id="paperdoll">
+          <div class="pd-col" id="pd-left"></div>
+          <div class="pd-col" id="pd-right"></div>
+          <div class="pd-weapons" id="pd-weapons"></div>
+        </div>
+        <div class="tooltip" id="tooltip" hidden></div>
+        <div class="slot-pop" id="slot-pop" hidden></div>
         <div class="hint" id="hint">Drag to turn · scroll or pinch to zoom · double-click to face front</div>
         <div class="drawing" id="drawing">Drawing…</div>
         <div class="empty" id="empty">Pick a race and a set, or ask the composer.</div>

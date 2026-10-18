@@ -238,61 +238,114 @@ function wearSet(set) {
   searchSets();
 }
 
-// ---- slots ----
+// ---- the paper doll: the slots around the character, laid out as the game's character pane ----
+
+const PAPERDOLL = {
+  left: ['head', 'neck', 'shoulder', 'back', 'chest', 'shirt', 'tabard', 'wrist'],
+  right: ['hands', 'waist', 'legs', 'feet', 'finger1', 'finger2', 'trinket1', 'trinket2'],
+  weapons: ['mainHand', 'offHand'],
+};
+/** The game's empty-slot pictures (Interface/PaperDoll/UI-PaperDoll-Slot-*.blp); the back shows the chest's, as in the game. */
+const EMPTY = {
+  head: 136516, neck: 136519, shoulder: 136526, back: 136512, chest: 136512, shirt: 136525, tabard: 136527, wrist: 136530,
+  hands: 136515, waist: 136529, legs: 136517, feet: 136513, finger1: 136514, finger2: 136514, trinket1: 136528, trinket2: 136528,
+  mainHand: 136518, offHand: 136524,
+};
+/** Slots the game has that nothing on the model shows: kept, dimmed, so the pane looks as it does in the game. */
+const UNSEEN = { neck: 'Neck', finger1: 'Finger', finger2: 'Finger', trinket1: 'Trinket', trinket2: 'Trinket' };
 
 let openSlot;
 function renderSlots() {
   const shown = report?.slots ?? {};
-  $('slots').replaceChildren(
-    ...meta.slots.map((slot) => {
-      const item = shown[slot.id];
-      const changed = slot.id in state.gear;
-      const row = el(
-        'li',
-        {},
-        el(
-          'div',
-          { className: 'slot', onclick: () => toggleSlot(slot.id) },
-          item ? el('img', { src: `/icon/${item.icon}.png`, alt: '' }) : el('span', { className: 'blank' }),
-          el(
-            'div',
-            { className: 'what' },
-            el('div', { className: 'slot-name' }, slot.name, changed ? el('span', { className: 'changed', textContent: state.gear[slot.id] === null ? ' · hidden' : ' · changed' }) : null),
-            el('div', { className: `item-name q${item?.quality ?? 1}`, textContent: item ? item.name : '—' }),
-          ),
-        ),
-      );
-      if (openSlot === slot.id) row.append(picker(slot));
-      return row;
-    }),
+  const button = (id) => {
+    const slot = meta.slots.find((s) => s.id === id);
+    if (!slot) {
+      return el('div', { className: 'pd-slot unseen', title: `${UNSEEN[id]}: not shown on the character` }, el('img', { src: `/icon/${EMPTY[id]}.png`, alt: '' }));
+    }
+    const item = shown[id];
+    const changed = id in state.gear;
+    const node = el(
+      'button',
+      {
+        className: `pd-slot${item ? ` q${item.quality}` : ' vacant'}${openSlot === id ? ' open' : ''}${changed ? ' changed' : ''}`,
+        onclick: (event) => {
+          event.stopPropagation();
+          toggleSlot(id);
+        },
+        onmouseenter: () => tooltip(node, slot, item, changed),
+        onmouseleave: () => tooltip(),
+        ariaLabel: `${slot.name}: ${item ? item.name : 'empty'}`,
+      },
+      el('img', { src: `/icon/${item ? item.icon : EMPTY[id]}.png`, alt: '' }),
+    );
+    return node;
+  };
+  $('pd-left').replaceChildren(...PAPERDOLL.left.map(button));
+  $('pd-right').replaceChildren(...PAPERDOLL.right.map(button));
+  $('pd-weapons').replaceChildren(...PAPERDOLL.weapons.map(button));
+  const pop = $('slot-pop');
+  const slot = meta.slots.find((s) => s.id === openSlot);
+  pop.hidden = !slot;
+  if (slot) pop.replaceChildren(picker(slot, shown[slot.id]));
+}
+
+/** A tooltip like the game's beside a slot, or none. */
+function tooltip(node, slot, item, changed) {
+  const tip = $('tooltip');
+  if (!node || openSlot) {
+    tip.hidden = true;
+    return;
+  }
+  tip.replaceChildren(
+    ...[
+      el('div', { className: `tip-name q${item?.quality ?? 1}`, textContent: item ? item.name : slot.name }),
+      el('div', { className: 'tip-slot', textContent: item ? slot.name : 'Empty' }),
+      changed && el('div', { className: 'tip-note', textContent: state.gear[slot.id] === null ? 'Hidden on this look' : 'Changed from the set' }),
+      el('div', { className: 'tip-hint', textContent: 'Click to change' }),
+    ].filter(Boolean),
   );
+  tip.hidden = false;
+  const board = $('picture').getBoundingClientRect();
+  const box = node.getBoundingClientRect();
+  const left = box.left - board.left;
+  const onRight = left > board.width / 2;
+  tip.style.top = `${Math.min(box.top - board.top, board.height - tip.offsetHeight - 8)}px`;
+  tip.style.left = onRight ? '' : `${left + box.width + 8}px`;
+  tip.style.right = onRight ? `${board.right - box.left + 8}px` : '';
 }
 
 function toggleSlot(id) {
   openSlot = openSlot === id ? undefined : id;
+  tooltip();
   renderSlots();
-  if (openSlot) document.querySelector('.picker input')?.focus();
+  if (openSlot) $('slot-pop').querySelector('input')?.focus({ preventScroll: true });
 }
 
-function picker(slot) {
-  const results = el('div');
+function closeSlot() {
+  if (!openSlot) return;
+  openSlot = undefined;
+  renderSlots();
+}
+
+function picker(slot, item) {
+  const results = el('div', { className: 'pop-results' });
   const input = el('input', { type: 'search', placeholder: `Search ${slot.name.toLowerCase()} items`, autocomplete: 'off' });
   let mine = 0;
   const search = async () => {
     const asked = ++mine;
-    const { items, total } = await get(`/api/items?slot=${slot.id}&q=${encodeURIComponent(input.value)}&limit=30`);
+    const { items, total } = await get(`/api/items?slot=${slot.id}&q=${encodeURIComponent(input.value)}&limit=40`);
     if (asked !== mine) return;
     results.replaceChildren(
       el('div', { className: 'dim small', textContent: `${total} items` }),
-      ...items.map((item) =>
+      ...items.map((found) =>
         el('div', {
-          className: `item q${item.quality}`,
+          className: `item q${found.quality}`,
           onclick: () => {
-            state.gear[slot.id] = item.id;
-            openSlot = undefined;
+            state.gear[slot.id] = found.id;
+            closeSlot();
             redraw(0);
           },
-        }, el('img', { src: `/icon/${item.icon}.png`, loading: 'lazy' }), item.name),
+        }, el('img', { src: `/icon/${found.icon}.png`, loading: 'lazy' }), found.name),
       ),
     );
   };
@@ -304,12 +357,18 @@ function picker(slot) {
   search();
   return el(
     'div',
-    { className: 'picker' },
+    { className: 'picker', onclick: (event) => event.stopPropagation() },
+    el(
+      'div',
+      { className: 'pop-head' },
+      el('div', {}, el('div', { className: 'slot-name', textContent: slot.name }), el('div', { className: `item-name q${item?.quality ?? 1}`, textContent: item ? item.name : 'Empty' })),
+      el('button', { className: 'ghost', textContent: '✕', ariaLabel: 'Close', onclick: closeSlot }),
+    ),
     el(
       'div',
       { className: 'row' },
-      el('button', { textContent: 'Hide slot', onclick: () => { state.gear[slot.id] = null; openSlot = undefined; redraw(0); } }),
-      el('button', { textContent: 'Undo change', disabled: !(slot.id in state.gear), onclick: () => { delete state.gear[slot.id]; openSlot = undefined; redraw(0); } }),
+      el('button', { textContent: 'Hide slot', onclick: () => { state.gear[slot.id] = null; closeSlot(); redraw(0); } }),
+      el('button', { textContent: 'Undo change', disabled: !(slot.id in state.gear), onclick: () => { delete state.gear[slot.id]; closeSlot(); redraw(0); } }),
     ),
     input,
     results,
@@ -581,6 +640,11 @@ function wire() {
   };
   $('ideas').replaceChildren(...IDEAS.map((idea) => el('button', { type: 'button', textContent: idea, onclick: () => ($('prompt').value = idea) })));
   for (const b of $('tabs').children) b.onclick = () => showTab(b.dataset.tab);
+  document.addEventListener('keydown', (event) => event.key === 'Escape' && closeSlot());
+  $('slot-pop').onclick = (event) => event.stopPropagation();
+  // Turning the character puts the picker away.
+  $('live').addEventListener('pointerdown', closeSlot);
+  $('preview').addEventListener('click', closeSlot);
 }
 
 async function start() {
@@ -600,6 +664,8 @@ async function start() {
   status.textContent = `Retail ${meta.build}`;
   status.className = 'status good';
   if (!meta.races.some((r) => r.id === state.race)) state.race = meta.races[0].id;
+  // A touchscreen has no scroll wheel or double-click to mention.
+  if (window.matchMedia('(pointer: coarse)').matches) $('hint').textContent = 'Drag to turn · pinch to zoom · tap a slot to change it';
   if (webglWorks()) {
     live = new Live($('live'), (view) => {
       state.yaw = view.yaw;
@@ -610,6 +676,7 @@ async function start() {
   }
   wire();
   syncControls();
+  renderSlots();
   showTab('character');
   loadOptions();
   searchSets();
