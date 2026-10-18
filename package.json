@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "e2e": "playwright test",
-    "mogshot": "node bin/mogshot.mjs"
+    "mogshot": "node bin/mogshot.mjs",
+    "transmogify": "node bin/transmogify.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

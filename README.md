@@ -29,6 +29,7 @@ What works today, in Chrome on a Mac, against WoW build 1.60.1.70170 (`wow_class
 - The page shows the product and build it found, how many of the build's files are on disk, and whether high-res textures are installed.
 - The addon: copy `addon/Mogshot` into `_classic_beta_/Interface/AddOns/` or `_retail_/Interface/AddOns/` (one copy loads in both; on retail it also records the transmog each slot shows), log in to each character, and type `/reload` (the game writes the file on `/reload` or logout), then drag the folder onto the page again.
 - NPCs on the command line: `"npc": 7274` draws a creature display as the game draws it, Tyrande Whisperwind for one: a humanoid NPC takes its player race and sex, its appearance choices, its gear (by item look rather than by item) and its painted body texture from the creature tables, and keeps every pose, clip, place, title and backdrop a player gets. An NPC can be named where the game knows the name: the pets the files list, and the NPCs this computer has seen in the game (read from the client's creature cache); `mogshot npcs <words>` lists them. A creature with a model of its own (a beast, an elemental, a pet) is drawn from that model with the display's textures and the game's scale; it has no choices or gear, and a model that keeps variants (a saddle, a second set of horns) as sections shows them all. Checked on Tyrande, a Living Flame and a Mechanical Squirrel only; the slot numbers of NPC gear other than head, shirt, legs and hands are unverified.
+- Retail's transmog sets on the command line (18 Oct 2026, build 12.1.5.70448): `mogshot transmogsets [words]` lists the named sets of the game's Appearances tab (4,900 or so: raid tiers in each difficulty's colour, PvP seasons, heritage armour, dungeon, Trading Post and world sets), filtered by `--class`, `--kind`, `--label` and `--expansion`. `"set": { "name": "Judgment Armor" }` or `{ "id": 901 }` without a class dresses the character in one, each piece in the set's own look, and `"label": "Mythic"` picks a variant. A gear slot can also take `{ "source": n }`, an appearance source, to wear one piece of another set in its colour. Checked on Judgment Armor (paladin T2) on a human, Heritage of the Sin'dorei on a blood elf, and Cosmic Penitent's Raiment (Mythic) on a night elf. Whether a set is raid, PvP, heritage or dungeon is guessed from its name and label; sets carry no weapons.
 - The 45 database tables the character, gear, NPC, backdrop and portrait pipeline needs match wago.tools' export of the same build cell for cell. Sections encrypted with unpublished keys are skipped and counted (69 of 19,293 items in this build).
 - The only thing fetched from the network is the table definitions, from wowdev/WoWDBDefs on GitHub, kept in the browser after the first visit.
 
@@ -76,6 +77,18 @@ pnpm mogshot export shots.json
 ```
 
 The same spec with `"out"` ending `.glb` writes the character as a glTF binary for Blender and other 3D tools: the meshes with the textures Mogshot composited (skin, hair and gear baked), a skeleton, and animations baked frame by frame from the poses the renderer draws. `"animations"` names the ones to bake (a list, or `"all"`; without it, the pose's own and Stand), `"fps"` the rate (30). Only the vertices the character draws are kept. The skeleton is flat (every bone a root, as the game's matrices are), so a tool poses the model exactly as Mogshot does but has no parent chain to drag by hand. Blender's built-in glTF importer reads it; no add-on. A character with eight animations is about 7 MB and takes under a second.
+
+## Transmogify
+
+A page for dressing retail characters, served from the computer that runs it:
+
+```
+pnpm transmogify
+```
+
+It listens on port 4190 (127.0.0.1 and the tailnet address; `TRANSMOGIFY_PORT`, `TRANSMOGIFY_HOSTS`) and reads the game through `WOW_DIR` and `WOW_PRODUCT` (default: retail on williams-macbook-pro-2 over ssh). The transmog sets and the slots are on the left: race, sex and class, a search of the sets with filters for kind, expansion and class, each set's difficulties and colours as buttons, and an item search for each slot. The character is in the middle, with poses, backdrops, turn and zoom; Save draws a 2160 × 2160 picture with its spec into `TRANSMOGIFY_SAVE`. The composer is on the right: a request in words ("6 night elf druid mogs in purple and silver") goes to `claude -p`, which searches the sets and items through the page's own API, checks each spec, and gives back looks that are drawn in a grid; one click puts a look on the page to change. Its specs are checked again before they are drawn and sent back once to be fixed. Pictures are drawn the command line's way in one Chrome kept open, about a second each, and kept by spec. On a phone the three columns are tabs.
+
+Known to be missing: the composer cannot see colours, so "purple" is matched by set names only; a set's pieces list does not show which variant's look the icons are; the page has no clip or place controls.
 
 ## Development
 

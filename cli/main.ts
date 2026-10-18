@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { SLOTS, type Slot } from '../src/character/equipment';
+import { EXPANSIONS, type SetKind } from '../src/character/transmog';
 import { buildCreatureScene } from '../src/character/creature-scene';
 import { buildCharacterScene, type CharacterRig, type CharacterScene } from '../src/character/scene';
 import { CLIP_FORMATS, clipTimes, loopedTimes } from '../src/render/clip';
@@ -30,6 +31,8 @@ const HELP = `Mogshot from the command line: World of Warcraft characters as PNG
   mogshot npcs [words]                 NPCs the game can name whose name has the words, with their display ids
   mogshot items <slot> [words]         items for a slot whose name has the words
   mogshot sets <class>                 the class's sets, best first, with the weapons that go with each
+  mogshot transmogsets [words]         retail's named transmog sets whose name has the words; --class <class>,
+                                       --kind raid|pvp|heritage|dungeon|other, --label Mythic, --expansion Legion
   mogshot backdrops                    gradients and loading screens
   mogshot sizes                        the sizes that have names
   mogshot characters                   characters the Mogshot addon saved in the game folder
@@ -52,6 +55,8 @@ Everything is printed as JSON. A spec, with every field but a race, a character 
                                                   model of its own (a beast, a pet) has none of those
     "choices": { "Hair Style": 4, "Face": "…" },  option -> choice by place in the list (from 1), name, or {"id": n}
     "set": { "class": "Hunter", "name": "Giantstalker" },   without a name, the class's best set
+    "set": { "name": "Judgment Armor", "label": "Normal" },  no class: a retail transmog set by name or "id",
+                                                  "label" its variant (mogshot transmogsets)
     "gear": { "head": 16939, "mainHand": "Rhok'delar", "back": null },   id, name, or null to leave empty
     "pose": "Ready",                              or { "animation": "EmoteDance", "at": 0.5 }
     "clip": true,                                 a looping clip of the pose's animation instead of a picture; "out" ends
@@ -201,6 +206,30 @@ export async function run(argv: string[], host: Host): Promise<number> {
       print((await session.equipment()).sets(info.id).map((set) => ({ name: set.name, level: set.level, pieces: named(set.pieces), weapons: named(set.weapons) })));
       return 0;
     }
+    case 'transmogsets': {
+      const words = [...rest];
+      const take = (name: string) => {
+        const at = words.indexOf(`--${name}`);
+        return at < 0 ? undefined : words.splice(at, 2)[1];
+      };
+      const className = take('class');
+      const kind = take('kind') as SetKind | undefined;
+      const label = take('label');
+      const expansion = take('expansion');
+      const [catalog, classes] = await Promise.all([session.transmogSets(), session.classes()]);
+      const classId = className === undefined ? undefined : classOf(classes, /^\d+$/.test(className) ? Number(className) : className).id;
+      const expansionId = expansion === undefined ? undefined : /^\d+$/.test(expansion) ? Number(expansion) : EXPANSIONS.findIndex((e) => e.toLowerCase().includes(expansion.toLowerCase()));
+      const { sets, total } = catalog.search(words.join(' '), { classId, kind, label, expansionId }, 60);
+      const nameOfClass = (id: number) => classes.find((c) => c.id === id)?.name ?? `Class ${id}`;
+      print({
+        total,
+        sets: sets.map((set) => ({
+          id: set.id, name: set.name, label: set.label || undefined, kind: set.kind, expansion: set.expansion,
+          classes: set.classes.length > 0 ? set.classes.map(nameOfClass) : 'any', parent: set.parentId || undefined, pieces: set.pieces.length,
+        })),
+      });
+      return 0;
+    }
     case 'backdrops': {
       print({ gradients: GRADIENTS.map((g) => g.name), screens: (await session.screens()).map((s) => ({ name: s.name, fileId: s.fileId, wide: s.wide })) });
       return 0;
@@ -249,45 +278,11 @@ async function render(file: string | undefined, session: Session, host: Host): P
   try {
     for (const [index, spec] of specs.entries()) {
       const out = resolve(base, spec.out ?? `mogshot-${index + 1}.${spec.clip ? 'mp4' : 'png'}`);
-      const start = performance.now();
       try {
-        const shot = resolveSpec(spec, world);
-        const { scene, rig } = await build(shot, session, world);
-        const clip = shot.clip && (await film(shot.clip, scene, rig));
-        const place = shot.place && (await buildPlace(session.storage, shot.place));
-        const screen = shot.backdrop.kind === 'screen' ? await session.image(shot.backdrop.fileId) : undefined;
-        if (shot.backdrop.kind === 'screen' && !screen) throw new Error('The loading screen could not be read');
-        const job: Job = {
-          scene, camera: shot.camera, ...shot.size, backdrop: shot.backdrop, screen, classicScreen: shot.classicScreen,
-          place,
-          empty: shot.empty,
-          title: shot.title,
-          clip: clip && { format: clip.format, fps: clip.fps, framing: clip.framing, poses: clip.poses, cameraTo: clip.cameraTo },
-        };
-        room ??= await Darkroom.open(await host.harness());
-        const drawn = await room.shoot(pack(job));
+        const { file: drawn, report } = await shoot(spec, session, world, async () => (room ??= await Darkroom.open(await host.harness())));
         await mkdir(dirname(out), { recursive: true });
-        await writeFile(out, drawn.file);
-        pictures.push({
-          out,
-          width: drawn.width,
-          height: drawn.height,
-          ...(clip && { clip: { kind: CLIP_FORMATS[clip.format].name, animation: clip.animation, frames: clip.poses.length, fps: clip.fps, length: Number((clip.poses.length / clip.fps).toFixed(2)) } }),
-          seconds: Number(((performance.now() - start) / 1000).toFixed(1)),
-          ...(shot.npc && { npc: { id: shot.npc.displayId, name: shot.npc.name, title: shot.npc.title, creature: shot.npc.creatureId, scale: shot.npc.scale } }),
-          // An NPC can be built on a race no player can be; a creature of its own kind has none.
-          ...(shot.raceId !== undefined && { race: world.appearance.races.find((r) => r.id === shot.raceId)?.name ?? `Race ${shot.raceId}` }),
-          ...(shot.sex !== undefined && { sex: sexName(shot.sex) }),
-          pose: scene.pose.preset ?? scene.animations.find((a) => a.sequence === scene.pose.sequence)?.name,
-          gear: Object.fromEntries([
-            ...[...shot.gear].map(([slot, item]) => [slot, `${item.name} (${item.id})`]),
-            ...[...shot.wear].map(([slot, displayId]) => [slot, `Display ${displayId}`]),
-          ]),
-          ...(place && { place: { ground: place.ground.map((n) => Number(n.toFixed(2))), ground_tiles: place.terrain.length, parts: place.meshes.length, props: place.instances.length, propKinds: place.props.length } }),
-          problems: [...shot.problems, ...scene.problems, ...(place?.problems ?? []), ...drawn.problems],
-          notes: shot.notes,
-          graphics: drawn.graphics,
-        });
+        await writeFile(out, drawn);
+        pictures.push({ out, ...report });
       } catch (cause) {
         failed++;
         pictures.push({ out, error: messageOf(cause) });
@@ -298,6 +293,54 @@ async function render(file: string | undefined, session: Session, host: Host): P
   }
   print(pictures);
   return failed > 0 ? 1 : 0;
+}
+
+/** What `shoot` reports about a picture besides the file. */
+export type ShotReport = Record<string, unknown> & { problems: string[]; notes: string[] };
+
+/**
+ * Draw one spec: resolve its names, build the character, and have the page draw it. `room`
+ * gives the Chrome page to draw in, opened the first time it is asked for.
+ */
+export async function shoot(spec: Spec, session: Session, world: World, room: () => Promise<Darkroom>): Promise<{ file: Buffer; report: ShotReport }> {
+  const start = performance.now();
+  const shot = resolveSpec(spec, world);
+  const { scene, rig } = await build(shot, session, world);
+  const clip = shot.clip && (await film(shot.clip, scene, rig));
+  const place = shot.place && (await buildPlace(session.storage, shot.place));
+  const screen = shot.backdrop.kind === 'screen' ? await session.image(shot.backdrop.fileId) : undefined;
+  if (shot.backdrop.kind === 'screen' && !screen) throw new Error('The loading screen could not be read');
+  const job: Job = {
+    scene, camera: shot.camera, ...shot.size, backdrop: shot.backdrop, screen, classicScreen: shot.classicScreen,
+    place,
+    empty: shot.empty,
+    title: shot.title,
+    clip: clip && { format: clip.format, fps: clip.fps, framing: clip.framing, poses: clip.poses, cameraTo: clip.cameraTo },
+  };
+  const drawn = await (await room()).shoot(pack(job));
+  return {
+    file: drawn.file,
+    report: {
+      width: drawn.width,
+      height: drawn.height,
+      ...(clip && { clip: { kind: CLIP_FORMATS[clip.format].name, animation: clip.animation, frames: clip.poses.length, fps: clip.fps, length: Number((clip.poses.length / clip.fps).toFixed(2)) } }),
+      seconds: Number(((performance.now() - start) / 1000).toFixed(1)),
+      ...(shot.npc && { npc: { id: shot.npc.displayId, name: shot.npc.name, title: shot.npc.title, creature: shot.npc.creatureId, scale: shot.npc.scale } }),
+      // An NPC can be built on a race no player can be; a creature of its own kind has none.
+      ...(shot.raceId !== undefined && { race: world.appearance.races.find((r) => r.id === shot.raceId)?.name ?? `Race ${shot.raceId}` }),
+      ...(shot.sex !== undefined && { sex: sexName(shot.sex) }),
+      pose: scene.pose.preset ?? scene.animations.find((a) => a.sequence === scene.pose.sequence)?.name,
+      poses: scene.presets.map((p) => p.name),
+      gear: Object.fromEntries([
+        ...[...shot.gear].map(([slot, item]) => [slot, `${item.name} (${item.id})`]),
+        ...[...shot.wear].map(([slot, displayId]) => [slot, `Display ${displayId}`]),
+      ]),
+      ...(place && { place: { ground: place.ground.map((n) => Number(n.toFixed(2))), ground_tiles: place.terrain.length, parts: place.meshes.length, props: place.instances.length, propKinds: place.props.length } }),
+      problems: [...shot.problems, ...scene.problems, ...(place?.problems ?? []), ...drawn.problems],
+      notes: shot.notes,
+      graphics: drawn.graphics,
+    },
+  };
 }
 
 /** A spec with the two fields an export adds to a shot. */
@@ -357,11 +400,13 @@ async function exportCommand(file: string | undefined, session: Session): Promis
 }
 
 /** Everything a spec's names are placed against. */
-async function worldOf(session: Session): Promise<World> {
-  const [appearance, equipment, classes, screens, records, maps, creatures, seen] = await Promise.all([
+export async function worldOf(session: Session): Promise<World> {
+  const [appearance, equipment, classes, screens, records, maps, creatures, seen, transmog] = await Promise.all([
     session.appearance(), session.equipment(), session.classes(), session.screens(), session.records(), session.maps(), session.creatures(), session.creatureCache(),
+    // Classic builds may lack the tables; then a spec cannot name a transmog set.
+    session.transmogSets().catch(() => undefined),
   ]);
-  return { appearance, equipment, classes, screens, records, maps, creatures, seen, installed: (fileId) => session.storage.files.find(fileId) !== undefined };
+  return { appearance, equipment, classes, screens, records, maps, creatures, seen, transmog, installed: (fileId) => session.storage.files.find(fileId) !== undefined };
 }
 
 /** Build the shot's character, or creature, in its pose. */

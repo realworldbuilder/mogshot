@@ -4,6 +4,7 @@ import { Appearance } from '../src/character/appearance';
 import { type LoadingScreen, loadLoadingScreens } from '../src/character/backdrops';
 import { Creatures } from '../src/character/creatures';
 import { type ClassInfo, Equipment } from '../src/character/equipment';
+import { TransmogSets } from '../src/character/transmog';
 import { Database } from '../src/db2/database';
 import { Definitions } from '../src/db2/definitions';
 import { decodeBlp, type Image } from '../src/formats/blp';
@@ -33,6 +34,7 @@ export interface SeenCreatures {
 export class Session {
   private appearancePromise: Promise<Appearance> | undefined;
   private equipmentPromise: Promise<Equipment> | undefined;
+  private transmogPromise: Promise<TransmogSets> | undefined;
   private screensPromise: Promise<LoadingScreen[]> | undefined;
   private recordsPromise: Promise<ImportedRecord[]> | undefined;
   private mapsPromise: Promise<MapInfo[]> | undefined;
@@ -70,6 +72,11 @@ export class Session {
 
   equipment(): Promise<Equipment> {
     return (this.equipmentPromise ??= Equipment.load(this.database));
+  }
+
+  /** Retail's named transmog sets. */
+  transmogSets(): Promise<TransmogSets> {
+    return (this.transmogPromise ??= this.equipment().then((equipment) => TransmogSets.load(this.database, equipment)));
   }
 
   /** The loading screens whose picture this install has. */

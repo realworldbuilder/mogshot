@@ -1,6 +1,7 @@
 import type { Appearance, Option, Race } from '../src/character/appearance';
 import type { LoadingScreen } from '../src/character/backdrops';
 import type { CreatureDisplay, Creatures } from '../src/character/creatures';
+import type { TransmogSetInfo, TransmogSets } from '../src/character/transmog';
 import { type ClassInfo, type Equipment, type ItemSummary, type Slot, SLOTS } from '../src/character/equipment';
 import type { PoseRequest } from '../src/character/scene';
 import type { CachedCreature } from '../src/import/creature-cache';
@@ -36,10 +37,18 @@ export interface Spec {
   sex?: 'male' | 'female' | 0 | 1;
   /** Option name or id -> choice. Options left out keep the character's choice, or the first one. */
   choices?: Record<string, ChoiceRef>;
-  /** A class's set of armour with weapons to match; without a name, the class's best. */
-  set?: { class: string | number; name?: string };
-  /** Slot -> item id or name; null empties the slot. Applied over the character's and the set's items. */
-  gear?: Partial<Record<Slot, number | string | null>>;
+  /**
+   * With a class: that class's set of armour (an item set) with weapons to match; without a
+   * name, the class's best. Without a class: one of retail's transmog sets, by name or id,
+   * and `label` picks its variant ("Mythic", "Heroic", a heritage colour).
+   */
+  set?: { class: string | number; name?: string } | { name?: string; id?: number; label?: string; class?: undefined };
+  /**
+   * Slot -> item id or name, or `{ "source": n }` for an appearance source (an item in one
+   * of its looks, as a transmog set lists them); null empties the slot. Applied over the
+   * character's and the set's items.
+   */
+  gear?: Partial<Record<Slot, number | string | { source: number } | null>>;
   /** A curated pose by name, or a moment of an animation (`at` is 0..1 through it). */
   pose?: string | { animation: string; at?: number } | { animationId: number; variation?: number; time?: number };
   /** Angles in degrees. */
@@ -136,8 +145,33 @@ export interface World {
   maps: MapInfo[];
   creatures: Creatures;
   seen: SeenCreatures;
+  /** Retail's named transmog sets; undefined where the build has none. */
+  transmog?: TransmogSets;
   /** Whether a file of the build is on disk. */
   installed: (fileId: number) => boolean;
+}
+
+/** The transmog set a spec's `set` names: by id, or by name and then label. */
+export function transmogSetOf(catalog: TransmogSets | undefined, ref: { name?: string; id?: number; label?: string }): TransmogSetInfo {
+  if (!catalog || catalog.sets.length === 0) throw new Error('This build has no transmog sets; they are in retail (--product wow)');
+  if (ref.id !== undefined) {
+    const set = catalog.get(ref.id);
+    if (!set) throw new Error(`There is no transmog set ${ref.id}`);
+    return ref.label === undefined ? set : byName(catalog.variants(set.id), ref.label, `variant of ${set.name}`, (s) => s.label);
+  }
+  if (!ref.name) throw new Error('A transmog set needs a "name" or an "id"; a class set needs a "class"');
+  const wanted = plain(ref.name);
+  let named = catalog.sets.filter((s) => plain(s.name) === wanted);
+  if (named.length === 0) {
+    const set = byName(catalog.search(ref.name, {}, 500).sets, ref.name, 'transmog set', (s) => s.name);
+    named = catalog.sets.filter((s) => s.name === set.name);
+  }
+  if (ref.label !== undefined) {
+    const variants = [...new Map(named.flatMap((s) => catalog.variants(s.id)).map((s) => [s.id, s])).values()];
+    return byName(variants, ref.label, `variant of ${named[0]!.name}`, (s) => s.label);
+  }
+  // The base set (a variant has a parent), then the most pieces.
+  return [...named].sort((a, b) => Number(a.parentId > 0) - Number(b.parentId > 0) || b.pieces.length - a.pieces.length || a.id - b.id)[0]!;
 }
 
 const plain = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -197,9 +231,17 @@ function choiceOf(option: Option, ref: ChoiceRef): number {
   return byName(option.choices, ref, `${option.name} choice`, (c) => c.name).id;
 }
 
-function itemOf(equipment: Equipment, slot: Slot, ref: number | string): ItemSummary {
+function itemOf(equipment: Equipment, slot: Slot, ref: number | string | { source: number }): ItemSummary {
   const info = SLOTS.find((s) => s.id === slot);
   if (!info) throw new Error(`There is no slot called "${slot}". The slots are: ${SLOTS.map((s) => s.id).join(', ')}`);
+  if (typeof ref === 'object') {
+    const source = equipment.source(ref.source);
+    if (!source || source.displayId === 0) throw new Error(`Appearance source ${ref.source} has no look in the game data`);
+    const item = equipment.resolveItem(source.itemId);
+    if (!item) throw new Error(`Appearance source ${ref.source} is item ${source.itemId}, which has no look in the game data`);
+    if (!info.inventoryTypes.includes(item.inventoryType)) throw new Error(`${item.name} (source ${ref.source}) does not go in the ${info.name.toLowerCase()} slot`);
+    return { ...item, displayId: source.displayId };
+  }
   if (typeof ref === 'number') {
     const item = equipment.resolveItem(ref);
     if (!item) throw new Error(`Item ${ref} has no look in the game data`);
@@ -425,7 +467,14 @@ export function resolveSpec(spec: Spec, world: World): Shot {
       choices.set(option.id, choiceOf(option, ref));
     }
 
-    if (spec.set) {
+    if (spec.set && spec.set.class === undefined) {
+      const set = transmogSetOf(world.transmog, spec.set);
+      for (const piece of set.pieces) {
+        gear.set(piece.slot, { ...piece.item, displayId: piece.displayId });
+        wear.delete(piece.slot);
+      }
+      notes.push(`Transmog set ${set.name}${set.label ? ` (${set.label})` : ''}, id ${set.id}: ${set.pieces.map((p) => p.slot).join(', ')}`);
+    } else if (spec.set) {
       const info = classOf(world.classes, spec.set.class);
       const sets = equipment.sets(info.id);
       if (sets.length === 0) throw new Error(`The game data has no sets for ${info.name}`);
@@ -435,7 +484,7 @@ export function resolveSpec(spec: Spec, world: World): Shot {
         wear.delete(slot);
       }
     }
-    for (const [slot, ref] of Object.entries(spec.gear ?? {}) as [Slot, number | string | null][]) {
+    for (const [slot, ref] of Object.entries(spec.gear ?? {}) as [Slot, number | string | { source: number } | null][]) {
       if (ref === null) gear.delete(slot);
       else gear.set(slot, itemOf(equipment, slot, ref));
       wear.delete(slot);

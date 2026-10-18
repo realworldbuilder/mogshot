@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Transmogify</title>
+  <link rel="stylesheet" href="app.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <header class="bar">
+    <h1>Transmogify</h1>
+    <span id="status" class="status">Opening the game…</span>
+  </header>
+
+  <div class="layout" id="layout" data-tab="character">
+    <aside class="panel left" id="left">
+      <section>
+        <h2>Character</h2>
+        <div class="row">
+          <select id="race" aria-label="Race"></select>
+          <div class="toggle" id="sex">
+            <button data-sex="male">Male</button><button data-sex="female">Female</button>
+          </div>
+        </div>
+        <div class="row">
+          <select id="class" aria-label="Class"></select>
+          <button id="scarletfire" class="ghost" title="Night elf druid with Scarletfire's look">Scarletfire</button>
+        </div>
+        <details id="looks">
+          <summary>Appearance</summary>
+          <div id="options" class="options"></div>
+          <button id="clear-look" class="ghost small">Default look</button>
+        </details>
+      </section>
+
+      <section class="sets">
+        <h2>Transmog sets</h2>
+        <input id="set-q" type="search" placeholder="Search sets: judgment, heritage, gladiator…" autocomplete="off">
+        <div class="chips" id="kinds"></div>
+        <div class="row">
+          <select id="expansion" aria-label="Expansion"><option value="">Every expansion</option></select>
+          <label class="check"><input type="checkbox" id="my-class" checked> My class</label>
+        </div>
+        <div id="set-count" class="dim small"></div>
+        <ol id="set-list" class="set-list"></ol>
+      </section>
+
+      <section>
+        <h2>Slots</h2>
+        <ol id="slots" class="slots"></ol>
+      </section>
+    </aside>
+
+    <main class="stage" id="stage">
+      <div class="picture" id="picture">
+        <img id="preview" alt="">
+        <div class="drawing" id="drawing">Drawing…</div>
+        <div class="empty" id="empty">Pick a race and a set, or ask the composer.</div>
+      </div>
+      <div class="controls">
+        <div class="chips" id="poses"></div>
+        <div class="row">
+          <select id="backdrop" aria-label="Backdrop"></select>
+          <label class="slider">Turn <input id="yaw" type="range" min="-180" max="180" step="5" value="0"></label>
+          <label class="slider">Zoom <input id="zoom" type="range" min="0.5" max="2.5" step="0.05" value="1"></label>
+        </div>
+        <div class="row actions">
+          <input id="name" placeholder="Name this look" autocomplete="off">
+          <button id="save" class="primary">Save</button>
+          <a id="download" class="button" download>PNG</a>
+          <button id="copy">Copy spec</button>
+        </div>
+        <div id="saved" class="small"></div>
+        <ul id="problems" class="problems"></ul>
+      </div>
+    </main>
+
+    <aside class="panel right" id="right">
+      <h2>Composer</h2>
+      <p class="dim small">Ask for looks in words. It searches the real sets and items, checks every spec, and draws them below.</p>
+      <div id="chat" class="chat"></div>
+      <form id="compose" class="compose">
+        <textarea id="prompt" rows="3" placeholder="6 night elf druid mogs in purple and silver"></textarea>
+        <div class="row">
+          <label class="check small"><input type="checkbox" id="with-current" checked> Start from the look on the page</label>
+          <button class="primary" id="send">Make</button>
+        </div>
+        <div class="chips small" id="ideas"></div>
+      </form>
+      <div id="grid" class="grid"></div>
+    </aside>
+  </div>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="left">Transmog</button>
+    <button data-tab="character">Character</button>
+    <button data-tab="right">Composer</button>
+  </nav>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
