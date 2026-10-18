@@ -2,7 +2,7 @@
 // Transmogify: the page and its server are in cli/transmogify.ts; this loads it through Vite,
 // which also serves the page Chrome draws the pictures in (on 127.0.0.1 only).
 import { fileURLToPath } from 'node:url';
-import { createServer } from 'vite';
+import { build, createServer } from 'vite';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const server = await createServer({
@@ -12,6 +12,19 @@ const server = await createServer({
   appType: 'mpa',
   cacheDir: 'node_modules/.vite-transmogify',
   server: { host: '127.0.0.1', port: Number(process.env.TRANSMOGIFY_HARNESS_PORT ?? 4191), strictPort: true, hmr: false, watch: null },
+});
+
+// The page's live view: Mogshot's renderer, bundled into one file for the browser.
+await build({
+  configFile: false,
+  root,
+  logLevel: 'error',
+  build: {
+    lib: { entry: 'transmogify/live.ts', formats: ['es'], fileName: () => 'live.js' },
+    outDir: 'node_modules/.cache/transmogify/dist',
+    emptyOutDir: true,
+    sourcemap: false,
+  },
 });
 
 let listening;

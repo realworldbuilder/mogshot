@@ -55,6 +55,8 @@
     <main class="stage" id="stage">
       <div class="picture" id="picture">
         <img id="preview" alt="">
+        <canvas id="live" aria-label="The character: drag to turn, scroll or pinch to zoom"></canvas>
+        <div class="hint" id="hint">Drag to turn · scroll or pinch to zoom · double-click to face front</div>
         <div class="drawing" id="drawing">Drawing…</div>
         <div class="empty" id="empty">Pick a race and a set, or ask the composer.</div>
       </div>
@@ -62,13 +64,12 @@
         <div class="chips" id="poses"></div>
         <div class="row">
           <select id="backdrop" aria-label="Backdrop"></select>
-          <label class="slider">Turn <input id="yaw" type="range" min="-180" max="180" step="5" value="0"></label>
-          <label class="slider">Zoom <input id="zoom" type="range" min="0.5" max="2.5" step="0.05" value="1"></label>
+          <label class="slider">Zoom <input id="zoom" type="range" min="0.4" max="3" step="0.05" value="1"></label>
         </div>
         <div class="row actions">
           <input id="name" placeholder="Name this look" autocomplete="off">
           <button id="save" class="primary">Save</button>
-          <a id="download" class="button" download>PNG</a>
+          <button id="download">PNG</button>
           <button id="copy">Copy spec</button>
         </div>
         <div id="saved" class="small"></div>

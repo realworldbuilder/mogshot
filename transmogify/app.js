@@ -1,4 +1,7 @@
-// Transmogify's page. State is a Mogshot spec in pieces; every change draws it again on the server.
+// Transmogify's page. State is a Mogshot spec in pieces; every change builds the character again
+// on the server, and the live view (live.ts) draws it here to be turned by hand.
+
+import { Live, webglWorks } from './live.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...children) => {
@@ -53,6 +56,8 @@ let options = [];
 /** The set picked from the list, for its variants. */
 let activeSet;
 let composerSession;
+/** The live view, where the browser can draw it; else the page shows pictures the server draws. */
+let live;
 
 /** The spec the page shows. */
 function spec() {
@@ -80,16 +85,25 @@ function redraw(soon = 250) {
   timer = setTimeout(draw, soon);
 }
 
+/** The spec without its camera: turning and zooming happen in the live view. */
+function liveSpec() {
+  const s = spec();
+  delete s.camera;
+  return s;
+}
+
 async function draw() {
   const mine = ++ticket;
   const picture = $('picture');
   picture.classList.add('busy');
   try {
-    const result = await post('/api/render', { spec: spec() });
+    const result = live ? await post('/api/live', { spec: liveSpec() }) : await post('/api/render', { spec: spec() });
     if (mine !== ticket) return;
-    $('preview').src = result.url;
-    $('download').href = result.url;
-    $('download').download = `${slug($('name').value || 'look')}.png`;
+    if (live) {
+      await live.show(result.url, { yaw: state.yaw, zoom: state.zoom });
+      if (mine !== ticket) return;
+      picture.classList.add('live');
+    } else $('preview').src = result.url;
     picture.classList.remove('blank');
     report = result.report;
     showProblems(report.problems ?? [], report.notes ?? []);
@@ -334,7 +348,6 @@ function syncControls() {
   renderCharacter();
   renderBackdrops();
   renderPoses();
-  $('yaw').value = state.yaw;
   $('zoom').value = state.zoom;
   $('set-q').value = state.q;
   $('expansion').value = state.expansion;
@@ -504,13 +517,27 @@ function wire() {
     state.backdrop = $('backdrop').value;
     redraw(0);
   };
-  $('yaw').oninput = () => {
-    state.yaw = Number($('yaw').value);
-    redraw(400);
-  };
   $('zoom').oninput = () => {
     state.zoom = Number($('zoom').value);
-    redraw(400);
+    if (live) {
+      live.setView({ yaw: state.yaw, zoom: state.zoom });
+      keep();
+    } else redraw(400);
+  };
+  $('download').onclick = async () => {
+    $('download').disabled = true;
+    try {
+      // The picture at the angle on screen.
+      const { url } = await post('/api/render', { spec: spec() });
+      const a = el('a', { href: url, download: `${slug($('name').value || 'look')}.png` });
+      document.body.append(a);
+      a.click();
+      a.remove();
+    } catch (error) {
+      showProblems([], [], error.message);
+    } finally {
+      $('download').disabled = false;
+    }
   };
   $('name').oninput = () => delete $('name').dataset.auto;
 
@@ -573,6 +600,14 @@ async function start() {
   status.textContent = `Retail ${meta.build}`;
   status.className = 'status good';
   if (!meta.races.some((r) => r.id === state.race)) state.race = meta.races[0].id;
+  if (webglWorks()) {
+    live = new Live($('live'), (view) => {
+      state.yaw = view.yaw;
+      state.zoom = view.zoom;
+      $('zoom').value = state.zoom;
+      keep();
+    });
+  }
   wire();
   syncControls();
   showTab('character');

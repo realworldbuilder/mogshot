@@ -5,14 +5,15 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
-import { crc32, deflateSync } from 'node:zlib';
+import { crc32, deflateSync, gzipSync } from 'node:zlib';
 import { SLOTS, type Slot } from '../src/character/equipment';
 import { EXPANSIONS, type SetKind, type TransmogSetInfo } from '../src/character/transmog';
 import { GRADIENTS } from '../src/render/backdrop';
 import { Darkroom } from './browser';
-import { type Host, shoot, worldOf } from './main';
+import { build, film, type Host, shoot, worldOf } from './main';
 import { Session } from './session';
 import { classOf, offered, raceOf, resolveSpec, type Spec, type World } from './spec';
+import { pack } from './wire';
 
 /*
  * Transmogify: a page for dressing retail characters, served from this computer. The catalog
@@ -119,6 +120,61 @@ async function render(spec: Spec): Promise<{ id: string; url: string; report: Re
   await writeFile(file, png);
   await writeFile(reportFile, JSON.stringify(report));
   return { id, url: `/renders/${id}.png`, report, cached: false };
+}
+
+/** The frames a second of the idle loop the page plays. */
+const LIVE_FPS = 30;
+const lives = () => join(root, 'node_modules', '.cache', 'transmogify', 'live');
+
+/**
+ * The character for the page to draw itself and turn by hand, as character select does: the
+ * built scene, one pass of its pose's animation, and the backdrop, packed and gzipped. The
+ * camera is left out of the key, since turning it is the page's job.
+ */
+async function live(spec: Spec): Promise<{ id: string; url: string; report: Record<string, unknown>; cached: boolean }> {
+  const wanted: Spec = { ...spec };
+  for (const key of ['out', 'size', 'clip', 'title', 'camera'] as const) delete wanted[key];
+  const id = hashOf({ live: 1, ...wanted });
+  const file = join(lives(), `${id}.bin`);
+  const reportFile = join(lives(), `${id}.json`);
+  if (existsSync(file) && existsSync(reportFile)) {
+    return { id, url: `/live/${id}.bin`, report: JSON.parse(await readFile(reportFile, 'utf8')), cached: true };
+  }
+  const { session, world } = await game();
+  const start = performance.now();
+  try {
+    const shot = resolveSpec({ ...wanted, clip: { fps: LIVE_FPS } }, world);
+    const { scene, rig } = await build(shot, session, world);
+    // The rest pose has no animation to loop; it is shown still.
+    const clip = await film(shot.clip!, scene, rig).catch(() => undefined);
+    const screen = shot.backdrop.kind === 'screen' ? await session.image(shot.backdrop.fileId) : undefined;
+    const bytes = pack({
+      scene,
+      poses: clip?.poses ?? [],
+      framing: clip?.framing ?? scene.bounds,
+      fps: LIVE_FPS,
+      backdrop: shot.backdrop,
+      screen,
+      classicScreen: shot.classicScreen,
+    });
+    const report = {
+      seconds: Number(((performance.now() - start) / 1000).toFixed(1)),
+      bytes: bytes.length,
+      pose: scene.pose.preset,
+      poses: scene.presets.map((p) => p.name),
+      frames: clip?.poses.length ?? 0,
+      slots: Object.fromEntries([...shot.gear].map(([slot, item]) => [slot, { id: item.id, name: item.name, quality: item.quality, icon: item.iconFileId }])),
+      problems: [...shot.problems, ...scene.problems],
+      notes: shot.notes,
+    };
+    await mkdir(lives(), { recursive: true });
+    await writeFile(file, gzipSync(bytes, { level: 4 }));
+    await writeFile(reportFile, JSON.stringify(report));
+    return { id, url: `/live/${id}.bin`, report, cached: false };
+  } catch (cause) {
+    forgetGameOn(cause);
+    throw cause;
+  }
 }
 
 /** A PNG of RGBA pixels: the item icons. */
@@ -267,6 +323,8 @@ async function api(path: string, query: URLSearchParams, body: unknown): Promise
     }
     case 'render':
       return render((body as { spec: Spec }).spec);
+    case 'live':
+      return live((body as { spec: Spec }).spec);
     case 'save': {
       const { spec, name } = body as { spec: Spec; name?: string };
       const full: Spec = { ...spec, size: spec.size && typeof spec.size === 'string' ? spec.size : 'square' };
@@ -484,6 +542,16 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
     if (url.pathname.startsWith('/icon/')) {
       const png = await icon(Number(url.pathname.slice(6).replace('.png', '')));
       return png ? send(200, png, 'image/png') : send(404, '');
+    }
+    if (url.pathname.startsWith('/live/')) {
+      const file = join(lives(), url.pathname.slice(6).replace(/[^a-z0-9.]/g, ''));
+      if (!existsSync(file)) return send(404, '');
+      response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-encoding': 'gzip', 'cache-control': 'max-age=86400' });
+      return response.end(await readFile(file));
+    }
+    if (url.pathname === '/live.js') {
+      const file = join(root, 'node_modules', '.cache', 'transmogify', 'dist', 'live.js');
+      return existsSync(file) ? send(200, await readFile(file), 'text/javascript') : send(404, '');
     }
     if (url.pathname.startsWith('/renders/')) {
       const file = join(renders(), url.pathname.slice(9).replace(/[^a-z0-9.]/g, ''));

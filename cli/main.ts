@@ -410,7 +410,7 @@ export async function worldOf(session: Session): Promise<World> {
 }
 
 /** Build the shot's character, or creature, in its pose. */
-async function build(shot: Shot, session: Session, world: World): Promise<{ scene: CharacterScene; rig: CharacterRig }> {
+export async function build(shot: Shot, session: Session, world: World): Promise<{ scene: CharacterScene; rig: CharacterRig }> {
   const { scene, rig } =
     shot.creature || shot.raceId === undefined || shot.sex === undefined
       ? await buildCreatureScene(session.storage, { modelFileId: shot.creature!.fileId, textures: shot.creature!.textures, scale: shot.creature!.scale }, { pose: shot.pose })
@@ -446,7 +446,7 @@ async function build(shot: Shot, session: Session, world: World): Promise<{ scen
 }
 
 /** The poses of a clip's frames: the named animation, or the one the scene is posed in. */
-async function film(clip: NonNullable<Shot['clip']>, scene: CharacterScene, rig: CharacterRig) {
+export async function film(clip: NonNullable<Shot['clip']>, scene: CharacterScene, rig: CharacterRig) {
   const animation = clip.animation
     ? byName(scene.animations, clip.animation, 'animation', (a) => a.name)
     : scene.animations.find((a) => a.sequence === scene.pose.sequence);
