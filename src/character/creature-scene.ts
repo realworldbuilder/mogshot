@@ -33,9 +33,6 @@ export async function buildCreatureScene(
   const body = await readers.readModel(look.modelFileId, 'The creature model');
   if (!body) throw new Error(problems[problems.length - 1]);
   const { model, skin } = body;
-  if (model.skeletonFileId !== 0) {
-    throw new Error('This model keeps its skeleton in a separate file, which Mogshot cannot read yet');
-  }
   const builder = readers.body(model, look.scale);
 
   const overrides = new Map<number, number>();

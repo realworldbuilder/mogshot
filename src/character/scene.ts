@@ -3,6 +3,7 @@ import { decodeBlp, type Image } from '../formats/blp';
 import { animKeyData } from '../formats/anim';
 import { type BoneOffsets, parseBoneFile } from '../formats/bone';
 import { BONE_BILLBOARD, type M2Model, parseM2, SEQUENCE_INLINE, VERTEX_SIZE } from '../formats/m2';
+import { parseSkel, withSkeleton } from '../formats/skel';
 import { parseSkin, type Skin } from '../formats/skin';
 import { identity, multiply, scaling } from '../math/mat4';
 import { animationName } from '../model/animation-names';
@@ -311,7 +312,14 @@ export function sceneReaders(storage: CascStorage): SceneReaders {
   const readModel = async (fileId: number, what: string): Promise<{ model: M2Model; skin: Skin } | undefined> => {
     const modelBytes = await read(fileId, what);
     if (!modelBytes) return undefined;
-    const model = parseM2(modelBytes);
+    let model = parseM2(modelBytes);
+    if (model.skeletonFileId !== 0) {
+      const skelBytes = await read(model.skeletonFileId, `${what}'s skeleton`);
+      if (!skelBytes) return undefined;
+      const skeleton = parseSkel(skelBytes);
+      const parentBytes = skeleton.parentFileId ? await read(skeleton.parentFileId, `${what}'s parent skeleton`) : undefined;
+      model = withSkeleton(model, skeleton, parentBytes && parseSkel(parentBytes));
+    }
     const skinBytes = await read(model.skinFileIds[0] ?? 0, `${what}'s skin`);
     return skinBytes && { model, skin: parseSkin(skinBytes) };
   };
@@ -505,9 +513,6 @@ export async function buildCharacterScene(
   const body = await readModel(characterModel.fileId, 'The character model');
   if (!body) throw new Error(problems[problems.length - 1]);
   const { model, skin } = body;
-  if (model.skeletonFileId !== 0) {
-    throw new Error('This model keeps its skeleton in a separate file, which Mogshot cannot read yet');
-  }
   const builder = readers.body(model, request.scale);
   const { slots, buildMesh } = builder;
 

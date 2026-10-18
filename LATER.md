@@ -16,6 +16,6 @@ Ideas that are not the one job (folder → character → pose → transparent PN
 - Particle and ribbon effects on items
 - A legs-slot skirt (an NPC's long dress) should hide boot tops as a robe does; only a chest item's skirt does now
 - Guild tabard emblems
-- Reading models whose skeleton is in a separate `.skel` file (retail's newer races)
+- Props in a place whose skeleton is in a separate `.skel` file (characters, items and creatures read theirs)
 - Decrypting data whose keys are public (other WoW products)
 - Remembering the folder for folders outside /Applications and Program Files, where Chrome's picker is allowed
