@@ -374,6 +374,7 @@ async function build(shot: Shot, session: Session, world: World): Promise<{ scen
           sex: shot.sex,
           choices: shot.choices,
           gear: new Map([...shot.gear].map(([slot, item]) => [slot, item.id])),
+          looks: new Map([...shot.gear].flatMap(([slot, item]) => (item.displayId ? [[slot, item.displayId] as const] : []))),
           wear: shot.wear,
           bake: shot.bake,
           scale: shot.npc?.scale,

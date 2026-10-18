@@ -231,6 +231,8 @@ export async function exportGlb(scene: CharacterScene, rig: CharacterRig, option
         pbrMetallicRoughness: { metallicFactor: 0, roughnessFactor: 0.85, ...(texture >= 0 ? { baseColorTexture: { index: texture } } : {}) },
         alphaMode: ALPHA_MODES[draw.blendMode] ?? 'BLEND',
         doubleSided: (draw.materialFlags & 0x4) !== 0,
+        // glTF has no additive blending; the game's mode and flags ride along for a tool to rebuild it (3 and 4 add).
+        extras: { blendMode: draw.blendMode, materialFlags: draw.materialFlags, unlit: (draw.materialFlags & 0x1) !== 0 },
       };
       if (draw.blendMode === 1) material.alphaCutoff = 0.5;
       if (draw.materialFlags & 0x1) material.extensions = { KHR_materials_unlit: {} };

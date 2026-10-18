@@ -5,7 +5,8 @@
 -- it, so nothing has to be copied by hand. The game writes that file on /reload and on
 -- logout. /mogshot also shows a code to paste into the page, for when that is easier.
 --
--- Plain addon API only. Nothing leaves the game.
+-- Plain addon API only. Nothing leaves the game. One file for classic and retail: what
+-- only one of them has is looked for before it is used.
 
 local ADDON = ...
 local VERSION = 1
@@ -16,6 +17,40 @@ local SLOTS = {
 	{ "feet", 8 }, { "wrist", 9 }, { "hands", 10 }, { "back", 15 }, { "mainHand", 16 }, { "offHand", 17 },
 	{ "ranged", 18 }, { "tabard", 19 },
 }
+
+-- The worn item's name and quality, or nil when the game has not loaded it yet.
+local function itemName(id)
+	local name, _, quality
+	if C_Item and C_Item.GetItemInfo then name, _, quality = C_Item.GetItemInfo(id)
+	elseif GetItemInfo then name, _, quality = GetItemInfo(id) end
+	if not name and C_Item and C_Item.GetItemNameByID then name = C_Item.GetItemNameByID(id) end
+	if not quality and C_Item and C_Item.GetItemQualityByID then quality = C_Item.GetItemQualityByID(id) end
+	return name, quality
+end
+
+-- Retail draws a slot in the look the player chose (transmog), which the item id does not
+-- say: the game names that look as an appearance source (an ItemModifiedAppearance id),
+-- which also carries the item's colour. Nil on classic, which has neither.
+local function shownSource(slot)
+	if C_Item and C_Item.GetCurrentItemTransmogInfo and ItemLocation and ItemLocation.CreateFromEquipmentSlot then
+		local location = ItemLocation:CreateFromEquipmentSlot(slot)
+		if location and location:IsValid() then
+			for _, get in ipairs({ C_Item.GetCurrentItemTransmogInfo, C_Item.GetAppliedItemTransmogInfo, C_Item.GetBaseItemTransmogInfo }) do
+				local ok, info = pcall(get, location)
+				if ok and info and info.appearanceID and info.appearanceID > 0 then return info.appearanceID end
+			end
+		end
+	end
+	-- The worn item's own look, without transmog.
+	if C_TransmogCollection and C_TransmogCollection.GetItemInfo then
+		local link = GetInventoryItemLink("player", slot)
+		if link then
+			local ok, _, source = pcall(C_TransmogCollection.GetItemInfo, link)
+			if ok and source and source > 0 then return source end
+		end
+	end
+	return nil
+end
 
 local function say(text)
 	print("|cfff0b232Mogshot|r: " .. text)
@@ -75,21 +110,29 @@ local function capture(undressing)
 	entry.class = classFile
 	entry.classId = classId
 	-- The game files have no name for many items (the server supplies them), so pass them along.
-	local gear, named, items = {}, {}, 0
+	local gear, sources, named, items = {}, {}, {}, 0
 	for _, slot in ipairs(SLOTS) do
 		local id = GetInventoryItemID("player", slot[2])
 		if id and id > 0 then
 			gear[slot[1]] = id
 			items = items + 1
-			local name, _, quality
-			if GetItemInfo then name, _, quality = GetItemInfo(id) end
-			if not name and C_Item and C_Item.GetItemNameByID then name = C_Item.GetItemNameByID(id) end
-			if not quality and C_Item and C_Item.GetItemQualityByID then quality = C_Item.GetItemQualityByID(id) end
+			local name, quality = itemName(id)
 			if name then named[id] = { name = name, quality = quality or 1 } end
+			local ok, source = pcall(shownSource, slot[2])
+			if ok and source then
+				sources[slot[1]] = source
+				-- The look's own item, which is what is drawn, named too.
+				local got, info = false, nil
+				if C_TransmogCollection and C_TransmogCollection.GetSourceInfo then got, info = pcall(C_TransmogCollection.GetSourceInfo, source) end
+				if got and info and info.itemID and info.itemID ~= id and info.name and info.name ~= "" then
+					named[info.itemID] = { name = info.name, quality = info.quality or 1 }
+				end
+			end
 		end
 	end
 	if items > 0 or undressing or not entry.gear then
 		entry.gear = gear
+		entry.sources = next(sources) and sources or nil
 		entry.items = named
 		entry.t = time()
 	end
@@ -118,12 +161,15 @@ local function base36(n)
 end
 
 -- The record as a short code to paste into the page:
--- MOG2;Name-Realm;race;sex;class;gear;choices. No "|", which the game eats.
+-- MOG2;Name-Realm;race;sex;class;gear;choices, and on retail ;sources, the look shown in
+-- each slot, lettered like gear. No "|", which the game eats.
 local function code(entry)
-	local gear, choices = {}, {}
+	local gear, sources, choices = {}, {}, {}
 	for _, slot in ipairs(SLOTS) do
 		local id = entry.gear and entry.gear[slot[1]]
 		if id then gear[#gear + 1] = LETTERS[slot[1]] .. base36(id) end
+		local source = entry.sources and entry.sources[slot[1]]
+		if source then sources[#sources + 1] = LETTERS[slot[1]] .. base36(source) end
 	end
 	local options = {}
 	for option in pairs(entry.choices or {}) do options[#options + 1] = option end
@@ -133,6 +179,7 @@ local function code(entry)
 		"MOG2", key() or "", entry.raceId or entry.race or "", (entry.sex or 2) - 2, entry.classId or "",
 		table.concat(gear), table.concat(choices, "."),
 	}
+	if #sources > 0 then fields[#fields + 1] = table.concat(sources) end
 	return (table.concat(fields, ";"):gsub("|", ""))
 end
 
@@ -263,11 +310,13 @@ SlashCmdList["MOGSHOT"] = function(message)
 	local text = code(entry)
 	if showCode(text) then
 		say("the code is in the box in the middle of the screen. Copy it and paste it into the page. Or /reload and give the page the folder again.")
-	elseif ChatFrame_OpenChat then
+	elseif (ChatFrameUtil and ChatFrameUtil.OpenChat) or ChatFrame_OpenChat then
 		-- The box could not be made on this client: the chat line can be copied too.
-		ChatFrame_OpenChat(text)
+		local util = ChatFrameUtil and ChatFrameUtil.OpenChat and ChatFrameUtil
+		if util then util.OpenChat(text) else ChatFrame_OpenChat(text) end
 		say("the code is in the chat line, selected. Copy it, clear the line, and paste it into the page.")
-		local edit = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
+		local active = (util and util.GetActiveWindow) or ChatEdit_GetActiveWindow
+		local edit = active and active()
 		if edit and edit.HighlightText then edit:HighlightText() end
 	else
 		say("the code could not be shown. /reload and give the page the folder again.")

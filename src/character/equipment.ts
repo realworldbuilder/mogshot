@@ -47,6 +47,8 @@ export interface ItemSummary {
   inventoryType: number;
   /** File ID of the icon texture, or 0. */
   iconFileId: number;
+  /** The look it is worn in (an ItemDisplayInfo id) when not its usual one: a retail appearance source's. */
+  displayId?: number;
 }
 
 export type WeaponKind = 'oneHand' | 'twoHand' | 'long' | 'bow' | 'rifle' | 'crossbow' | 'thrown';
@@ -185,6 +187,8 @@ export class Equipment {
     private readonly textureInfo: Map<number, ComponentInfo>,
     private readonly helmetHide: Map<number, Map<number, number[]>>,
     private readonly fallbacks: Map<string, { model: RaceFallback; texture: RaceFallback }>,
+    /** Appearance sources (ItemModifiedAppearance ids): the item and the look each one is. */
+    private readonly sources: Map<number, { itemId: number; displayId: number }>,
   ) {
     for (const summary of summaries) this.items.set(summary.id, summary);
     for (const summary of unnamed) this.unnamed.set(summary.id, summary);
@@ -242,9 +246,12 @@ export class Equipment {
     const bestModifier = new Map<number, number>();
     const displayOfItem = new Map<number, number>();
     const iconOfItem = new Map<number, number>();
+    const sources = new Map<number, { itemId: number; displayId: number }>();
     for (const row of modified.rows) {
       const look = appearanceById.get(n(row.ItemAppearanceID));
       const displayId = n(look?.ItemDisplayInfoID);
+      // A source with no look is kept: retail's hidden appearances are such sources.
+      sources.set(n(row.ID), { itemId: n(row.ItemID), displayId });
       if (displayId === 0) continue;
       const itemId = n(row.ItemID);
       const modifier = n(row.ItemAppearanceModifierID);
@@ -373,6 +380,7 @@ export class Equipment {
       component(componentTextures.rows, false),
       helmetHide,
       fallbacks,
+      sources,
     );
   }
 
@@ -387,6 +395,15 @@ export class Equipment {
    */
   resolveItem(id: number): ItemSummary | undefined {
     return this.items.get(id) ?? this.items.get(this.canonical.get(id) ?? -1) ?? this.unnamed.get(id);
+  }
+
+  /**
+   * An appearance source (an ItemModifiedAppearance id, which retail's transmog gives): the
+   * item it is and the look it is in, the look 0 for a hidden appearance. Undefined if the
+   * source is not in this build.
+   */
+  source(id: number): { itemId: number; displayId: number } | undefined {
+    return this.sources.get(id);
   }
 
   /** The classes a race can be, in name order. */
@@ -554,10 +571,12 @@ export class Equipment {
     );
   }
 
-  /** What wearing an item does to a race and sex, or undefined if the item is unknown. */
-  look(itemId: number, slot: Slot, race: number, sex: number): ItemLook | undefined {
+  /**
+   * What wearing an item does to a race and sex, or undefined if the item is unknown. A
+   * `displayId` wears it in that look rather than its usual one (a retail appearance source).
+   */
+  look(itemId: number, slot: Slot, race: number, sex: number, displayId = this.displayOfItem.get(itemId)): ItemLook | undefined {
     const item = this.items.get(itemId) ?? this.unnamed.get(itemId);
-    const displayId = this.displayOfItem.get(itemId);
     if (!item || displayId === undefined) return undefined;
     return this.lookByDisplay(displayId, slot, race, sex, item);
   }

@@ -45,6 +45,31 @@ describe('imported character records', () => {
     expect(decodeRecord('MOG2;Thrall-Whitemane;2;0;7;Zd37Hd37X;')).toEqual(expect.objectContaining({ gear: { head: 16963 } }));
   });
 
+  it('reads a retail code, whose last field is the look shown in each slot', () => {
+    // What the addon writes on retail 12.1.5 for a transmogged Void Elf mage (built by
+    // running Mogshot.lua against a stand-in for the retail API): helm hidden, chest and
+    // weapon transmogged, legs in their own look.
+    const code = 'MOG2;Elowyn-Area 52;29;1;8;H4jkwC4jkzP4jl1M4gby;8hl.8iy;H1nogC4bh8P42lzM300w';
+    const record = decodeRecord(code);
+    expect(record).toEqual({
+      key: 'Elowyn-Area 52',
+      name: 'Elowyn',
+      realm: 'Area 52',
+      race: '',
+      raceId: 29,
+      sex: 1,
+      classId: 8,
+      className: undefined,
+      gear: { head: 212000, chest: 212003, legs: 212005, mainHand: 207790 },
+      sources: { head: 77344, chest: 201500, legs: 190007, mainHand: 140000 },
+      choices: [[0, 11001], [0, 11050]],
+      captured: 0,
+    });
+    expect(encodeRecord(record!)).toBe(code);
+    // A classic code has no such field, and is written as before.
+    expect(decodeRecord('MOG2;Thrall-Whitemane;2;0;7;Hd37MeobReft;119.12y')).not.toHaveProperty('sources');
+  });
+
   it('still reads the first, long form of the code, with item names', () => {
     const code = 'MOG1;Thrall-Whitemane;Orc;2;0;7;SHAMAN;1790216430;head:16963,mainHand:19019,ranged:18713;24:1341,25:1402';
     expect(decodeRecord(code)).toEqual(thrall);
@@ -82,6 +107,14 @@ describe('imported character records', () => {
     expect(human).toEqual(expect.objectContaining({ name: 'Renée', sex: 0, raceId: undefined, gear: { chest: 12640 }, choices: [] }));
     expect(human!.items).toEqual({ 12640: { name: 'Lionheart "Helm"', quality: 4 } });
     expect(recordsFromSavedVariables('Other = {}')).toEqual([]);
+  });
+
+  it('reads the looks a retail character shows from the addon’s file', () => {
+    const [record] = recordsFromSavedVariables(`MogshotDB = {
+["Elowyn-Area 52"] = { ["v"] = 1, ["t"] = 1792300000, ["race"] = "VoidElf", ["raceId"] = 29, ["sex"] = 3, ["class"] = "MAGE", ["classId"] = 8,
+  ["gear"] = { ["head"] = 212000, ["chest"] = 212003 }, ["sources"] = { ["head"] = 77344, ["chest"] = 201500, ["hat"] = 5 } },
+}`);
+    expect(record).toEqual(expect.objectContaining({ gear: { head: 212000, chest: 212003 }, sources: { head: 77344, chest: 201500 } }));
   });
 
   it('keeps the newest capture of a character found in several files', () => {

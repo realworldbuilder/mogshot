@@ -30,6 +30,12 @@ export interface ImportedRecord {
   className?: string;
   /** Item ids by slot. */
   gear: Partial<Record<ImportSlot, number>>;
+  /**
+   * The look shown in each slot, as the game's appearance source id (an
+   * ItemModifiedAppearance row): retail's transmog, or the worn item's own look with its
+   * colour. Drawn in place of `gear` where given. Classic gives none.
+   */
+  sources?: Partial<Record<ImportSlot, number>>;
   /** Appearance choices as the game numbers them: option id and choice id. */
   choices: [number, number][];
   /**
@@ -65,27 +71,40 @@ function splitKey(key: string): { name: string; realm: string } {
   return dash < 0 ? { name: key, realm: '' } : { name: key.slice(0, dash), realm: key.slice(dash + 1) };
 }
 
+function encodeSlots(ids: Partial<Record<ImportSlot, number>>): string {
+  return IMPORT_SLOTS.filter((slot) => ids[slot]).map((slot) => SLOT_LETTERS[slot] + ids[slot]!.toString(36)).join('');
+}
+
+function decodeSlots(text: string): Partial<Record<ImportSlot, number>> {
+  const ids: Partial<Record<ImportSlot, number>> = {};
+  for (const [, letter, id] of text.matchAll(/([A-Z])([0-9a-z]+)/g)) {
+    const slot = IMPORT_SLOTS.find((s) => SLOT_LETTERS[s] === letter);
+    const value = base36(id!);
+    if (slot && value) ids[slot] = value;
+  }
+  return ids;
+}
+
 /**
  * The record as a short code the player can paste:
- * `MOG2;Name-Realm;race;sex;class;gear;choices`. The race is its id (or its file name when
- * the id is unknown), gear is a letter per slot followed by the item id in base 36, and
- * choices are choice ids in base 36 separated by dots (a choice id names its option).
- * Item names and the capture time are left out. No `|`, which the game eats.
+ * `MOG2;Name-Realm;race;sex;class;gear;choices[;sources]`. The race is its id (or its file
+ * name when the id is unknown), gear is a letter per slot followed by the item id in base
+ * 36, and choices are choice ids in base 36 separated by dots (a choice id names its
+ * option). Retail adds sources, the look in each slot, lettered like gear; codes without
+ * them are classic's. Item names and the capture time are left out. No `|`, which the game eats.
  */
 export function encodeRecord(record: ImportedRecord): string {
-  const gear = IMPORT_SLOTS.filter((slot) => record.gear[slot]).map((slot) => SLOT_LETTERS[slot] + record.gear[slot]!.toString(36));
   const choices = record.choices.map(([, choice]) => choice.toString(36));
-  return [CODE_TAG, record.key, record.raceId ?? record.race, record.sex, record.classId ?? '', gear.join(''), choices.join('.')].join(';');
+  const fields = [CODE_TAG, record.key, record.raceId ?? record.race, record.sex, record.classId ?? '', encodeSlots(record.gear), choices.join('.')];
+  const sources = encodeSlots(record.sources ?? {});
+  if (sources) fields.push(sources);
+  return fields.join(';');
 }
 
 function decodeShort(fields: string[]): ImportedRecord | undefined {
-  const [, key = '', raceText = '', sex, classId, gearText = '', choicesText = ''] = fields;
-  const gear: ImportedRecord['gear'] = {};
-  for (const [, letter, id] of gearText.matchAll(/([A-Z])([0-9a-z]+)/g)) {
-    const slot = IMPORT_SLOTS.find((s) => SLOT_LETTERS[s] === letter);
-    const itemId = base36(id!);
-    if (slot && itemId) gear[slot] = itemId;
-  }
+  const [, key = '', raceText = '', sex, classId, gearText = '', choicesText = '', sourcesText = ''] = fields;
+  const gear = decodeSlots(gearText);
+  const sources = decodeSlots(sourcesText);
   const choices: [number, number][] = [];
   for (const text of choicesText.split('.').filter(Boolean)) {
     const choice = base36(text);
@@ -104,6 +123,7 @@ function decodeShort(fields: string[]): ImportedRecord | undefined {
     classId: num(classId),
     className: undefined,
     gear,
+    ...(Object.keys(sources).length > 0 ? { sources } : {}),
     choices,
     captured: 0,
   };
@@ -168,6 +188,11 @@ function recordFromLua(key: string, value: LuaValue): ImportedRecord | undefined
     const id = num(at(value, 'gear', slot));
     if (id) gear[slot] = id;
   }
+  const sources: NonNullable<ImportedRecord['sources']> = {};
+  for (const slot of IMPORT_SLOTS) {
+    const id = num(at(value, 'sources', slot));
+    if (id) sources[slot] = id;
+  }
   const choices: [number, number][] = [];
   const chosen = value.get('choices');
   if (chosen instanceof Map) {
@@ -197,6 +222,7 @@ function recordFromLua(key: string, value: LuaValue): ImportedRecord | undefined
     classId: num(value.get('classId')),
     className: typeof className === 'string' && className !== '' ? className : undefined,
     gear,
+    ...(Object.keys(sources).length > 0 ? { sources } : {}),
     choices,
     captured: num(value.get('t')) ?? 0,
     ...(Object.keys(items).length > 0 ? { items } : {}),

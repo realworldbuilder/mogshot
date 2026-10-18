@@ -112,6 +112,8 @@ export interface CharacterRequest {
   gear?: ReadonlyMap<Slot, number>;
   /** Item looks (ItemDisplayInfo ids) worn in slots `gear` leaves empty: an NPC's gear. */
   wear?: ReadonlyMap<Slot, number>;
+  /** The look a `gear` item is worn in, where not its usual one (a retail appearance source's). */
+  looks?: ReadonlyMap<Slot, number>;
   /** A body texture painted in advance (an NPC's bake), drawn in place of the skin the choices would composite. */
   bake?: number;
   /** The game's size for the model; 1 unless it says otherwise. */
@@ -530,7 +532,7 @@ export async function buildCharacterScene(
   // What is worn: geosets and body textures now, models once the body is posed.
   const worn = new Map<Slot, ItemLook>();
   for (const [slot, itemId] of request.gear ?? []) {
-    const look = equipment?.look(itemId, slot, request.raceId, request.sex);
+    const look = equipment?.look(itemId, slot, request.raceId, request.sex, request.looks?.get(slot));
     if (look) worn.set(slot, look);
     else problems.push(`Item ${itemId} is not in the game data`);
   }

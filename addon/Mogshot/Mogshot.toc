@@ -1,8 +1,8 @@
-## Interface: 16001
+## Interface: 16001, 120105
 ## Title: Mogshot
 ## Notes: Remembers what your characters look like and wear, so mogshot can picture them. Type /mogshot for a code to paste.
 ## Author: William Hussey
-## Version: 0.1.0
+## Version: 0.2.0
 ## IconTexture: Interface\Icons\INV_Misc_Spyglass_03
 ## SavedVariables: MogshotDB
 ## X-Website: https://github.com/realworldbuilder/mogshot

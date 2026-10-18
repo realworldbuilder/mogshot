@@ -1,6 +1,6 @@
 import type { Appearance } from '../character/appearance';
 import { type Equipment, type ItemSummary, type Slot, SLOTS } from '../character/equipment';
-import type { ImportedRecord } from './record';
+import type { ImportedRecord, ImportSlot } from './record';
 
 /*
  * Turn a record the addon captured into something the page can draw: a race and sex the
@@ -56,9 +56,18 @@ export function resolveImport(record: ImportedRecord, appearance: Appearance, eq
 
   // Gear by slot. A hunter is pictured with the bow; anyone else gets the bow only if a hand is free.
   const gear: [Slot, ItemSummary][] = [];
-  const captured = Object.entries(record.gear).filter(([, id]) => id) as [keyof ImportedRecord['gear'], number][];
+  // A slot with a source shows that look even with nothing worn in it (worn id 0).
+  const shown = new Set([...Object.keys(record.gear), ...Object.keys(record.sources ?? {})] as ImportSlot[]);
+  const captured = [...shown]
+    .map((slot) => [slot, record.gear[slot] ?? 0] as [ImportSlot, number])
+    .filter(([slot, id]) => id || record.sources?.[slot]);
   let found = 0;
-  const lookup = (slot: string, id: number): ItemSummary | undefined => {
+  const lookup = (slot: ImportSlot, worn: number): ItemSummary | undefined => {
+    // Retail says what each slot shows (transmog included) as an appearance source: that item, in that look.
+    const sourceId = record.sources?.[slot];
+    const source = sourceId ? equipment.source(sourceId) : undefined;
+    if (sourceId && !source) problems.push(`Appearance ${sourceId} (${slot}) is not in the game data, so the worn item is drawn`);
+    const id = source?.itemId ?? worn;
     const item = equipment.resolveItem(id);
     const told = record.items?.[id];
     if (!item) {
@@ -67,7 +76,8 @@ export function resolveImport(record: ImportedRecord, appearance: Appearance, eq
     }
     found++;
     // The files have no name for many items; the addon passes along what the game called it.
-    return item.id === id && item.name === `Item ${id}` && told ? { ...item, name: told.name, quality: told.quality } : item;
+    const named = item.id === id && item.name === `Item ${id}` && told ? { ...item, name: told.name, quality: told.quality } : item;
+    return source ? { ...named, displayId: source.displayId } : named;
   };
   const taken = new Set<Slot>();
   const place = (slot: Slot, item: ItemSummary) => {
@@ -83,6 +93,12 @@ export function resolveImport(record: ImportedRecord, appearance: Appearance, eq
   const hunter = record.classId === CLASS_HUNTER;
   for (const [slot, id] of captured) {
     if (slot === 'ranged') continue;
+    const sourceId = record.sources?.[slot];
+    if (sourceId && equipment.source(sourceId)?.displayId === 0) {
+      found++;
+      notes.push(`The ${slot} slot is left empty: the character hides it`);
+      continue;
+    }
     const item = lookup(slot, id);
     if (!item) continue;
     if (slot === 'mainHand' && ranged && hunter) {
