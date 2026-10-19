@@ -938,6 +938,21 @@ export class CharacterRenderer {
     const far = Math.max((distance - farthest) * 1.5 + 1, this.place ? distance + this.place.reach : 0);
     return { view, projection: perspective(camera.fov, aspect, near, far), axes: { toCamera, right, up, tan: [tanX, tanY] as const }, near, far, distance };
   }
+
+  /**
+   * The camera turned and tilted as `camera` is, with the zoom and pan that put `point` in the
+   * middle of a view of that shape and fill half its height with `halfHeight` of the world: a
+   * close-up of a face, for one. The numbers mean the same to the command line's camera.
+   */
+  aimAt(camera: Camera, point: readonly [number, number, number], halfHeight: number, aspect: number): Camera {
+    const { distance, axes } = this.cameraMatrices({ ...camera, zoom: 1, panX: 0, panY: 0 }, aspect);
+    const { min, max } = this.framing ?? this.bounds;
+    const zoom = halfHeight / (distance * axes.tan[1]);
+    // The target is the box's centre less the pan times the half height (see cameraMatrices).
+    const offset = [0, 1, 2].map((c) => point[c]! - (min[c]! + max[c]!) / 2);
+    const along = (axis: readonly number[]) => offset.reduce((sum, value, c) => sum + value * axis[c]!, 0);
+    return { ...camera, zoom, panX: -along(axes.right) / halfHeight, panY: -along(axes.up) / halfHeight };
+  }
 }
 
 function link(gl: WebGL2RenderingContext, vertexSource: string, fragmentSource: string): WebGLProgram {

@@ -7,7 +7,8 @@ import { unpack } from '../cli/wire';
 /*
  * Transmogify's live view: the character the server built, drawn in the browser with
  * Mogshot's renderer, idling in its pose's animation. Drag to turn it, as on the game's
- * character select screen; scroll or pinch to zoom.
+ * character select screen; scroll or pinch to zoom; drag with the right button, with shift
+ * held, or with two fingers to slide the view.
  */
 
 interface LiveScene {
@@ -20,11 +21,21 @@ interface LiveScene {
   classicScreen: boolean;
 }
 
-/** The view's angle as the page keeps it: degrees, and the zoom. */
+/** The view as the page keeps it, in the spec's terms: degrees, the zoom (smaller is closer) and the pan. */
 export interface View {
   yaw: number;
   zoom: number;
+  panX: number;
+  panY: number;
+  /** Held on the face, showing this much of the character's height: the camera follows the head as it turns. */
+  face?: number;
 }
+
+/** The closest and farthest the zoom goes. */
+const NEAREST = 0.08;
+const FARTHEST = 3;
+/** The face framing's view: its half height is this share of the character's height, a head and shoulders. */
+const FACE = 0.24;
 
 const DEGREE = Math.PI / 180;
 /** Radians a pixel of drag turns the character. */
@@ -49,6 +60,10 @@ export class Live {
   private spin = 0;
   private lastTick = 0;
   private request = 0;
+  /** In the face framing: the share of the character's height the view's half height shows. */
+  private faceSize: number | undefined;
+  /** The face framing has moved the camera since the page was last told. */
+  private aimed = false;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -77,15 +92,57 @@ export class Live {
   }
 
   setView(view: View): void {
-    this.camera = { ...this.camera, yaw: view.yaw * DEGREE, zoom: view.zoom };
+    this.camera = { ...this.camera, yaw: view.yaw * DEGREE, zoom: view.zoom, panX: view.panX ?? 0, panY: view.panY ?? 0 };
+    this.faceSize = view.face;
+    this.aimed = view.face !== undefined;
   }
 
-  private view(): View {
+  view(): View {
     // Kept between -180 and 180 degrees, as the page's angles are.
     let yaw = (this.camera.yaw / DEGREE) % 360;
     if (yaw > 180) yaw -= 360;
     if (yaw < -180) yaw += 360;
-    return { yaw: Math.round(yaw), zoom: Number(this.camera.zoom.toFixed(2)) };
+    const round = (n: number) => Number(n.toFixed(3));
+    return {
+      yaw: Math.round(yaw),
+      zoom: round(this.camera.zoom),
+      panX: round(this.camera.panX),
+      panY: round(this.camera.panY),
+      ...(this.faceSize !== undefined && { face: round(this.faceSize) }),
+    };
+  }
+
+  /**
+   * A close-up of the face, for a profile picture: the head in the middle, about a head and
+   * shoulders tall. A character seen from behind is turned to face the camera, a little to one side.
+   */
+  face(): void {
+    let yaw = this.camera.yaw;
+    if (Math.abs(Math.atan2(Math.sin(yaw), Math.cos(yaw))) > 70 * DEGREE) yaw = 15 * DEGREE;
+    this.camera.yaw = yaw;
+    this.faceSize = FACE;
+    this.spin = 0;
+    this.aimed = true;
+  }
+
+  /** The whole character, as it starts. */
+  fullBody(): void {
+    this.faceSize = undefined;
+    this.camera = { ...this.camera, zoom: 1, panX: 0, panY: 0 };
+    this.spin = 0;
+    this.changed(this.view());
+  }
+
+  /** Aim at the head, for the face framing: worked out again each frame, since turning moves the head across the view. */
+  private aimAtFace(data: LiveScene) {
+    const { min, max } = data.framing;
+    // The helm point sits in the middle of the head; without one, the head is near the top of the box.
+    const head = data.scene.head ?? [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, max[2] - (max[2] - min[2]) * 0.08];
+    const tall = Math.max(head[2] - min[2], 0.1);
+    const aspect = this.canvas.width / Math.max(this.canvas.height, 1);
+    // A little below the helm point, at the eyes and mouth.
+    const at: [number, number, number] = [head[0], head[1], head[2] - tall * 0.03];
+    this.camera = this.renderer.aimAt(this.camera, at, tall * this.faceSize!, aspect);
   }
 
   private tick = (now: number) => {
@@ -121,6 +178,14 @@ export class Live {
       this.spin *= Math.pow(0.992, elapsed);
       if (Math.abs(this.spin) <= 0.00002) this.changed(this.view());
     }
+    if (this.faceSize !== undefined) {
+      this.aimAtFace(data);
+      // Once the camera is aimed at a new look's head, the page keeps those numbers for Save.
+      if (this.aimed && !this.dragging) {
+        this.aimed = false;
+        this.changed(this.view());
+      }
+    }
     this.renderer.render(this.camera);
   };
 
@@ -131,20 +196,26 @@ export class Live {
     const pointers = new Map<number, { x: number; y: number }>();
     let pinch = 0;
     let lastMove = 0;
+    /** This drag slides the view rather than turning the character. */
+    let panning = false;
     canvas.style.touchAction = 'none';
+    canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     canvas.addEventListener('pointerdown', (event) => {
       canvas.setPointerCapture(event.pointerId);
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       this.dragging = true;
       this.spin = 0;
       lastMove = event.timeStamp;
+      panning = event.button === 1 || event.button === 2 || event.shiftKey;
       if (pointers.size === 2) pinch = distance();
     });
     canvas.addEventListener('pointermove', (event) => {
       const last = pointers.get(event.pointerId);
       if (!last) return;
-      if (pointers.size === 1) {
-        const dx = event.clientX - last.x;
+      const dx = event.clientX - last.x;
+      const dy = event.clientY - last.y;
+      if (pointers.size === 1 && panning) this.panBy(dx, dy);
+      else if (pointers.size === 1) {
         this.camera.yaw -= dx * TURN;
         const dt = Math.max(event.timeStamp - lastMove, 1);
         this.spin = (-dx * TURN) / dt;
@@ -152,6 +223,8 @@ export class Live {
       }
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (pointers.size === 2) {
+        // Two fingers: the gap zooms, and moving them together slides the view (half each, one event a finger).
+        this.panBy(dx / 2, dy / 2);
         const now = distance();
         if (pinch > 0) this.zoomBy(now / pinch);
         pinch = now;
@@ -161,6 +234,7 @@ export class Live {
       if (!pointers.delete(event.pointerId)) return;
       if (pointers.size === 0) {
         this.dragging = false;
+        if (panning) this.spin = 0;
         // Held still before letting go: no flick.
         if (event.timeStamp - lastMove > 80) this.spin = 0;
         this.changed(this.view());
@@ -181,7 +255,8 @@ export class Live {
       { passive: false },
     );
     canvas.addEventListener('dblclick', () => {
-      this.camera = { ...this.camera, yaw: 0, zoom: 1 };
+      this.faceSize = undefined;
+      this.camera = { ...this.camera, yaw: 0, zoom: 1, panX: 0, panY: 0 };
       this.spin = 0;
       this.changed(this.view());
     });
@@ -191,7 +266,19 @@ export class Live {
     }
   }
 
+  /** Spreading fingers or scrolling up (a factor over 1) comes closer. */
   private zoomBy(factor: number) {
-    this.camera.zoom = Math.min(3, Math.max(0.4, this.camera.zoom * factor));
+    // On the face, zooming keeps the head in the middle.
+    if (this.faceSize !== undefined) this.faceSize = Math.min(1.2, Math.max(0.08, this.faceSize / factor));
+    else this.camera.zoom = Math.min(FARTHEST, Math.max(NEAREST, this.camera.zoom / factor));
+  }
+
+  /** Slide the view with the pointer: what is under it stays under it. */
+  private panBy(dx: number, dy: number) {
+    // Moving the view by hand lets go of the face.
+    this.faceSize = undefined;
+    const height = Math.max(this.canvas.clientHeight, 1);
+    this.camera.panX += (dx * 2) / height;
+    this.camera.panY -= (dy * 2) / height;
   }
 }

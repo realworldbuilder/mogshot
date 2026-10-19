@@ -59,7 +59,7 @@
         </div>
         <div class="tooltip" id="tooltip" hidden></div>
         <div class="slot-pop" id="slot-pop" hidden></div>
-        <div class="hint" id="hint">Drag to turn · scroll or pinch to zoom · double-click to face front</div>
+        <div class="hint" id="hint">Drag to turn · right-drag or shift-drag to move · scroll to zoom · double-click to reset</div>
         <div class="drawing" id="drawing">Drawing…</div>
         <div class="empty" id="empty">Pick a race and a set, or ask the composer.</div>
       </div>
@@ -67,7 +67,17 @@
         <div class="chips" id="poses"></div>
         <div class="row">
           <select id="backdrop" aria-label="Backdrop"></select>
-          <label class="slider">Zoom <input id="zoom" type="range" min="0.4" max="3" step="0.05" value="1"></label>
+          <div class="toggle" id="framing">
+            <button id="full-body" title="The whole character">Full body</button><button id="face" title="A close-up of the face, for a profile picture">Face</button>
+          </div>
+          <label class="slider">Zoom <input id="zoom" type="range" min="-1.1" max="2.5" step="0.01" value="0"></label>
+        </div>
+        <div class="row random">
+          <span class="dim small">Random</span>
+          <button id="random-set" title="One of this class's sets">Set</button>
+          <button id="random-mix" title="Each piece from a different set of this class's">Mix pieces</button>
+          <button id="random-anyone" title="Any race, any class, any set">Anyone</button>
+          <button id="roll" title="Six random looks for this character, in the grid">Roll 6</button>
         </div>
         <div class="row actions">
           <input id="name" placeholder="Name this look" autocomplete="off">

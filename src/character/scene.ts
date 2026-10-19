@@ -67,6 +67,8 @@ export interface CharacterScene {
   presets: PosePreset[];
   /** The pose the scene is in. */
   pose: PoseInfo;
+  /** Where the head is in that pose (the helm attachment point), when the model has one. */
+  head?: [number, number, number];
 }
 
 export interface AnimationInfo {
@@ -95,6 +97,8 @@ export interface PoseResult {
   meshes: { bones: Float32Array; transform: Float32Array }[];
   bounds: CharacterScene['bounds'];
   pose: PoseInfo;
+  /** Where the head is (the model's helm attachment point), when the model has one: for framing a face. */
+  head?: [number, number, number];
 }
 
 /** A built character kept ready to be posed again without rebuilding it. */
@@ -469,7 +473,9 @@ function sceneBuilder(storage: CascStorage, readers: SceneReaders, model: M2Mode
         growBounds(min, max, mesh.vertices, meshSkin, visible, meshBones, transform);
         return { bones: meshBones, transform };
       });
-      return { meshes: posed, bounds: { min, max }, pose: { sequence, time: at, duration, preset } };
+      const helm = attachmentMatrix(model, bones, ATTACH.helm);
+      const head: [number, number, number] | undefined = helm && [helm[12]! * scale, helm[13]! * scale, helm[14]! * scale];
+      return { meshes: posed, bounds: { min, max }, pose: { sequence, time: at, duration, preset }, head };
     },
     animations: () =>
       model.sequences.flatMap((sequence, index) =>
@@ -726,6 +732,7 @@ export async function buildCharacterScene(
     animations,
     presets,
     pose: first.pose,
+    head: first.head,
   };
   return { scene, rig: { pose: (sequence, time) => builder.pose(sequence, time) } };
 }

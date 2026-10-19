@@ -336,6 +336,8 @@ async function api(path: string, query: URLSearchParams, body: unknown): Promise
       await writeFile(join(SAVE_DIR, `${slug}.json`), `${JSON.stringify({ ...full, out: `${slug}.png` }, null, 2)}\n`);
       return { file: join(SAVE_DIR, `${slug}.png`), url: `${SAVE_URL}/${slug}.png`, report };
     }
+    case 'random':
+      return { looks: await randomLooks(body as RandomRequest) };
     case 'compose':
       return compose(body as ComposeRequest);
     case 'compose/status': {
@@ -349,6 +351,73 @@ async function api(path: string, query: URLSearchParams, body: unknown): Promise
 }
 
 class NotFound extends Error {}
+
+// ---- random looks -------------------------------------------------------------------------
+
+interface RandomRequest {
+  /** A set of the class's, a piece from a different set in each slot, or anyone at all in a set. */
+  mode: 'set' | 'mix' | 'anyone';
+  race?: number | string;
+  sex?: 'male' | 'female';
+  cls?: string;
+  backdrop?: Spec['backdrop'];
+  pose?: string;
+  count?: number;
+}
+
+const classSets = new Map<number, [Slot, { id: number }][][]>();
+const ARMOUR: Slot[] = ['head', 'shoulder', 'back', 'chest', 'wrist', 'hands', 'waist', 'legs', 'feet'];
+const pick = <T>(list: readonly T[]): T | undefined => list[Math.floor(Math.random() * list.length)];
+
+async function randomLooks(request: RandomRequest): Promise<{ title: string; cls: string; spec: Spec }[]> {
+  const { world } = await game();
+  const catalog = world.transmog;
+  if (!catalog) throw new Error('This build has no transmog sets');
+  const classesOf = (raceId: number) => world.equipment.classes(raceId).filter((c) => c.name !== 'Adventurer');
+  const looks = [];
+  for (let n = 0; n < Math.min(Math.max(request.count ?? 1, 1), 12); n++) {
+    let raceId: number;
+    let sex = request.sex ?? 'female';
+    let cls = request.cls;
+    if (request.mode === 'anyone' || request.race === undefined) {
+      const race = pick(world.appearance.races.filter((r) => classesOf(r.id).length > 0))!;
+      raceId = race.id;
+      sex = pick(race.sexes) === 1 ? 'female' : 'male';
+      cls = pick(classesOf(race.id))!.name;
+    } else {
+      raceId = typeof request.race === 'number' ? request.race : raceOf(world.appearance, request.race).id;
+    }
+    const info = classOf(world.classes, cls ?? classesOf(raceId)[0]!.name);
+    // Sets made for the class, with most of an outfit: no cosmetics any class can wear, no lone pieces.
+    const pool = catalog.sets.filter((set) => set.classes.includes(info.id) && set.pieces.length >= 5);
+    if (pool.length === 0) throw new Error(`There are no transmog sets for ${info.name}`);
+    const spec: Spec = { race: raceId, sex, pose: request.pose ?? 'Stand', backdrop: request.backdrop ?? 'Ember' };
+    const gear: NonNullable<Spec['gear']> = {};
+    let title: string;
+    if (request.mode === 'mix') {
+      const used: string[] = [];
+      for (const slot of ARMOUR) {
+        const set = pick(pool.filter((s) => s.pieces.some((p) => p.slot === slot)));
+        const piece = set?.pieces.find((p) => p.slot === slot);
+        if (!set || !piece) continue;
+        gear[slot] = { source: piece.sourceId };
+        if (slot === 'chest' || slot === 'head') used.push(set.name);
+      }
+      title = `Mix: ${used.join(' + ') || info.name}`;
+    } else {
+      const set = pick(pool)!;
+      spec.set = { id: set.id };
+      title = `${set.name}${set.label ? ` (${set.label})` : ''}`;
+    }
+    // Weapons the class carries, from one of its item sets (each set's are picked to match it, which takes a while: kept).
+    if (!classSets.has(info.id)) classSets.set(info.id, world.equipment.sets(info.id).map((set) => set.weapons));
+    const weapons = pick(classSets.get(info.id)!) ?? [];
+    for (const [slot, item] of weapons) gear[slot] = item.id;
+    if (Object.keys(gear).length > 0) spec.gear = gear;
+    looks.push({ title, cls: info.name, spec });
+  }
+  return looks;
+}
 
 // ---- the composer -------------------------------------------------------------------------
 

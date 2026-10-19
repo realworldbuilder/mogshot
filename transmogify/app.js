@@ -36,7 +36,7 @@ const IDEAS = [
 ];
 const KINDS = [['', 'All'], ['raid', 'Raid'], ['pvp', 'PvP'], ['heritage', 'Heritage'], ['dungeon', 'Dungeon'], ['other', 'Other']];
 
-const DEFAULT = { race: 4, sex: 'female', cls: 'Druid', choices: {}, set: null, gear: {}, pose: 'Stand', backdrop: 'Ember', yaw: 0, zoom: 1, kind: '', expansion: '', myClass: true, q: '' };
+const DEFAULT = { race: 4, sex: 'female', cls: 'Druid', choices: {}, set: null, gear: {}, pose: 'Stand', backdrop: 'Ember', yaw: 0, zoom: 1, panX: 0, panY: 0, kind: '', expansion: '', myClass: true, q: '' };
 const state = (() => {
   try {
     return { ...DEFAULT, ...JSON.parse(localStorage.getItem('transmogify') ?? '{}') };
@@ -67,7 +67,10 @@ function spec() {
   if (Object.keys(state.gear).length) s.gear = state.gear;
   s.pose = state.pose;
   if (state.backdrop && state.backdrop !== 'none') s.backdrop = state.backdrop.startsWith('screen:') ? { screen: state.backdrop.slice(7) } : state.backdrop;
-  if (state.yaw || state.zoom !== 1) s.camera = { yaw: state.yaw, zoom: state.zoom };
+  if (state.yaw || state.zoom !== 1 || state.panX || state.panY) {
+    s.camera = { yaw: state.yaw, zoom: state.zoom };
+    if (state.panX || state.panY) Object.assign(s.camera, { panX: state.panX, panY: state.panY });
+  }
   return s;
 }
 
@@ -85,6 +88,11 @@ function redraw(soon = 250) {
   timer = setTimeout(draw, soon);
 }
 
+/** The view in the live viewer's terms. */
+const view = () => ({ yaw: state.yaw, zoom: state.zoom, panX: state.panX ?? 0, panY: state.panY ?? 0, face: state.face });
+/** The zoom slider runs from far to close: it shows the closeness, the zoom's inverse, on a log scale. */
+const zoomToSlider = (zoom) => -Math.log(zoom);
+
 /** The spec without its camera: turning and zooming happen in the live view. */
 function liveSpec() {
   const s = spec();
@@ -100,7 +108,7 @@ async function draw() {
     const result = live ? await post('/api/live', { spec: liveSpec() }) : await post('/api/render', { spec: spec() });
     if (mine !== ticket) return;
     if (live) {
-      await live.show(result.url, { yaw: state.yaw, zoom: state.zoom });
+      await live.show(result.url, view());
       if (mine !== ticket) return;
       picture.classList.add('live');
     } else $('preview').src = result.url;
@@ -407,7 +415,8 @@ function syncControls() {
   renderCharacter();
   renderBackdrops();
   renderPoses();
-  $('zoom').value = state.zoom;
+  $('zoom').value = zoomToSlider(state.zoom);
+  $('face').classList.toggle('on', state.face !== undefined);
   $('set-q').value = state.q;
   $('expansion').value = state.expansion;
   $('my-class').checked = state.myClass;
@@ -472,8 +481,9 @@ async function showLooks(looks) {
   }
 }
 
-function wearLook(look) {
+function wearLook(look, { keepView = false } = {}) {
   const s = look.spec;
+  if (look.cls) state.cls = look.cls;
   const byName = meta.races.find((r) => r.name.toLowerCase() === String(s.race).toLowerCase());
   state.race = typeof s.race === 'number' ? s.race : (byName?.id ?? state.race);
   state.sex = s.sex === 1 || s.sex === 'female' ? 'female' : 'male';
@@ -482,8 +492,13 @@ function wearLook(look) {
   state.gear = s.gear ?? {};
   state.pose = typeof s.pose === 'string' ? s.pose : 'Stand';
   state.backdrop = typeof s.backdrop === 'string' ? s.backdrop : s.backdrop?.screen ? `screen:${s.backdrop.screen}` : 'none';
-  state.yaw = s.camera?.yaw ?? 0;
-  state.zoom = s.camera?.zoom ?? 1;
+  if (!keepView) {
+    state.yaw = s.camera?.yaw ?? 0;
+    state.zoom = s.camera?.zoom ?? 1;
+    state.panX = s.camera?.panX ?? 0;
+    state.panY = s.camera?.panY ?? 0;
+    state.face = undefined;
+  }
   $('name').value = look.title;
   delete $('name').dataset.auto;
   syncControls();
@@ -491,6 +506,34 @@ function wearLook(look) {
   searchSets();
   redraw(0);
   showTab('character');
+}
+
+// ---- random looks ----
+
+const randomRequest = (mode, count) => ({ mode, count, race: state.race, sex: state.sex, cls: state.cls, pose: state.pose, backdrop: spec().backdrop });
+
+async function random(mode) {
+  try {
+    const { looks } = await post('/api/random', randomRequest(mode, 1));
+    // The view stays where it is, so a face close-up can be rerolled.
+    if (looks[0]) wearLook(looks[0], { keepView: true });
+  } catch (error) {
+    showProblems([], [], error.message);
+  }
+}
+
+async function roll() {
+  $('roll').disabled = true;
+  try {
+    const [sets, mixes] = await Promise.all([post('/api/random', randomRequest('set', 3)), post('/api/random', randomRequest('mix', 3))]);
+    say('it', `Rolled 6 looks for a ${raceName(state.race)} ${state.cls}: three sets and three mixes.`);
+    if (window.matchMedia('(max-width: 820px)').matches) showTab('right');
+    await showLooks([...sets.looks, ...mixes.looks]);
+  } catch (error) {
+    showProblems([], [], error.message);
+  } finally {
+    $('roll').disabled = false;
+  }
 }
 
 // ---- wiring ----
@@ -577,12 +620,30 @@ function wire() {
     redraw(0);
   };
   $('zoom').oninput = () => {
-    state.zoom = Number($('zoom').value);
+    state.zoom = Number(Math.exp(-Number($('zoom').value)).toFixed(3));
+    // The slider sets the zoom by hand, which lets go of the face.
+    state.face = undefined;
+    $('face').classList.remove('on');
     if (live) {
-      live.setView({ yaw: state.yaw, zoom: state.zoom });
+      live.setView(view());
       keep();
     } else redraw(400);
   };
+  $('full-body').onclick = () => {
+    if (live) live.fullBody();
+    else {
+      Object.assign(state, { zoom: 1, panX: 0, panY: 0, face: undefined });
+      redraw(0);
+    }
+  };
+  $('face').onclick = () => {
+    if (live) live.face();
+  };
+  $('face').disabled = !live;
+  $('random-set').onclick = () => random('set');
+  $('random-mix').onclick = () => random('mix');
+  $('random-anyone').onclick = () => random('anyone');
+  $('roll').onclick = roll;
   $('download').onclick = async () => {
     $('download').disabled = true;
     try {
@@ -665,12 +726,12 @@ async function start() {
   status.className = 'status good';
   if (!meta.races.some((r) => r.id === state.race)) state.race = meta.races[0].id;
   // A touchscreen has no scroll wheel or double-click to mention.
-  if (window.matchMedia('(pointer: coarse)').matches) $('hint').textContent = 'Drag to turn · pinch to zoom · tap a slot to change it';
+  if (window.matchMedia('(pointer: coarse)').matches) $('hint').textContent = 'Drag to turn · two fingers to move and zoom · tap a slot to change it';
   if (webglWorks()) {
-    live = new Live($('live'), (view) => {
-      state.yaw = view.yaw;
-      state.zoom = view.zoom;
-      $('zoom').value = state.zoom;
+    live = new Live($('live'), (seen) => {
+      Object.assign(state, { face: undefined }, seen);
+      $('face').classList.toggle('on', seen.face !== undefined);
+      $('zoom').value = zoomToSlider(state.zoom);
       keep();
     });
   }

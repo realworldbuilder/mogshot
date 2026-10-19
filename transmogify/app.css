@@ -197,3 +197,6 @@ details summary { cursor: pointer; color: var(--dim); margin: 4px 0 8px; }
   .pd-weapons { bottom: 8px; }
   .slot-pop { width: calc(100% - 2 * (38px + 16px)); }
 }
+
+.random button { font-size: 0.85rem; padding: 4px 10px; }
+#framing button { font-size: 0.85rem; padding: 4px 10px; }
