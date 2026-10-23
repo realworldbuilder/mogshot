@@ -491,6 +491,8 @@ async function runBot() {
   });
   client.on(Events.Error, (cause) => log(`client error: ${messageOf(cause)}`));
   await client.login(config.token);
+  // Logged in; the client keeps running until the process is stopped.
+  await new Promise(() => {});
 }
 
 // ---------------------------------------------------------------- try
