@@ -90,6 +90,21 @@ It listens on port 4190 (127.0.0.1 and the tailnet address; `TRANSMOGIFY_PORT`, 
 
 Known to be missing: the composer cannot see colours, so "purple" is matched by set names only; a set's pieces list does not show which variant's look the icons are; the page has no clip or place controls; a browser without WebGL 2 gets still pictures from the server instead of the live view.
 
+## Discord bot
+
+Mogshot in a Discord chat: `/mog` draws a character and posts the picture.
+
+```
+pnpm mogbot register   # once, after the token is in ~/.config/wfg/mogbot.env
+pnpm mogbot            # run the bot
+```
+
+`/mog` takes `race` and `sex`, `set` (a retail transmog set or a classic class set, by name, with autocomplete from the same tables as `mogshot transmogsets` and `mogshot sets`), `pose` (the eleven curated poses), `backdrop` (the eight gradients, Slate unless said, or transparent), `clip` (a looping MP4 of the pose's animation instead of a picture: one pass, 1080 square, at most 10 seconds), `product` (classic unless said, or retail) and `code` (a MOG code from `/mogshot` in the game, drawn as worn). The bot answers inside Discord's three seconds, draws through `bin/mogshot.mjs render` one picture at a time, and edits its answer with the file and a line saying race, sex, set and pose, or with what could not be placed, in the command line's own words. One render per person at a time, and twenty an hour. The command is registered globally and the app installs to a server or to a person's account, so `/mog` works in any server, in a DM with the bot and in group DMs.
+
+It is configured by `~/.config/wfg/mogbot.env`, which is not in git: `DISCORD_TOKEN` and `DISCORD_APP_ID` from the developer portal, `WOW_DIR` and `WOW_PRODUCT` for classic (the command line's defaults), and `WOW_DIR_RETAIL` for retail (the MacBook over ssh unless said). The autocomplete lists are read once into `node_modules/.cache/mogbot/catalog.json`; `pnpm mogbot catalog` rebuilds them after a game update. `pnpm mogbot try 'race="Night Elf" sex=female set="Judgment Armor" product=retail'` draws one picture the way `/mog` would, without Discord, to `mogbot-try.png` (`--out` names another file; `clip=true` makes an MP4). On the Mac mini the bot runs under launchd as `com.william.mogbot`, logging to `~/Library/Logs/mogbot.log`.
+
+A clip with a transparent backdrop has a black background, as every video does. Everything the Status section says the renderer cannot draw holds here too.
+
 ## Development
 
 ```bash
