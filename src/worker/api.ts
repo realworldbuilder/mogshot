@@ -8,6 +8,7 @@ import type { ClassInfo, ItemSetInfo, ItemSummary, Slot, WeaponKind } from '../c
 import type { Image } from '../formats/blp';
 import type { CharacterScene, PackedRig, PoseRequest, PoseResult } from '../character/scene';
 import type { PickedFile } from '../io/file-list-source';
+import type { FightSoundName, FightSoundSet, SoundClip, SoundKitClips } from '../character/sounds';
 import type { ImportedRecord } from '../import/record';
 import type { ImportResult } from '../import/resolve';
 
@@ -42,6 +43,17 @@ export type Request =
       /** The animations whose keys are read in advance, so the character can be posed in them at once. */
       animations: string[];
     }
+  | {
+      id: number;
+      method: 'sounds';
+      raceId: number;
+      sex: number;
+      classId?: number;
+      /** The main-hand item, for the weapon's own swing and impact sounds. */
+      mainHand?: number;
+      /** How the weapon is held, when the item is not known. */
+      wielding?: WeaponKind | 'unarmed';
+    }
   | { id: number; method: 'searchItems'; slot: Slot; query: string }
   | { id: number; method: 'classList' }
   | { id: number; method: 'portraits' }
@@ -61,6 +73,7 @@ export interface ItemSearchResult {
 /** An icon's pixels, or undefined if the file cannot be read. */
 export type IconResult = Image | undefined;
 
+export type { FightSoundName, FightSoundSet, SoundClip, SoundKitClips };
 export type { ClassEntry, ClassInfo, ImportedRecord, ImportResult, ItemSetInfo, ItemSummary, LoadingScreen, PackedRig, Portraits, PoseRequest, PoseResult, Race, Slot, WeaponKind };
 
 export interface CharacterResult {

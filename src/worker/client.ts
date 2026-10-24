@@ -5,6 +5,7 @@ import type {
   CharacterResult,
   ClassEntry,
   FighterResult,
+  FightSoundSet,
   ImportedRecord,
   ImportResult,
   ItemSetInfo,
@@ -20,6 +21,7 @@ import type {
   Request,
   Response,
   Slot,
+  WeaponKind,
 } from './api';
 
 /** An error the worker raised. `install` means the folder itself is the problem. */
@@ -85,6 +87,18 @@ export class DataClient {
   /** Build a character and hand over everything needed to pose it on this thread, with the named animations ready. */
   fighter(raceId: number, sex: number, choices: [number, number][], gear: [Slot, number][], animations: string[]): Promise<FighterResult> {
     return this.call({ method: 'fighter', raceId, sex, choices, gear, animations });
+  }
+
+  /**
+   * The sounds of a fight for one fighter: weapon swings and impacts, the race's voice, a spell,
+   * the gong. `mainHand` is the item whose weapon sounds to use; `wielding` stands in when there is none.
+   */
+  sounds(raceId: number, sex: number, classId?: number, mainHand?: number, wielding?: WeaponKind | 'unarmed'): Promise<FightSoundSet> {
+    const request: Extract<RequestBody, { method: 'sounds' }> = { method: 'sounds', raceId, sex };
+    if (classId !== undefined) request.classId = classId;
+    if (mainHand !== undefined) request.mainHand = mainHand;
+    if (wielding !== undefined) request.wielding = wielding;
+    return this.call(request);
   }
 
   pose(sequence: number, time: number): Promise<PoseResult> {

@@ -519,6 +519,12 @@ export class Equipment {
    * Items for a slot whose name contains every word of the query. An empty query lists
    * the slot from the start of the alphabet. Names that start with the query come first.
    */
+  /** An item's weapon subclass (7 is a one-handed sword, 10 a staff), or undefined when it is not a weapon. */
+  weaponSubclass(itemId: number): number | undefined {
+    const kind = this.itemClass.get(this.canonical.get(itemId) ?? itemId) ?? this.itemClass.get(itemId);
+    return kind?.classId === CLASS_WEAPON ? kind.subclassId : undefined;
+  }
+
   search(slot: Slot, query: string, limit = 60): { items: ItemSummary[]; total: number } {
     const all = this.bySlot.get(slot) ?? [];
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);

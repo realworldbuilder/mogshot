@@ -7,6 +7,7 @@ import { type LoadingScreen, loadLoadingScreens } from '../character/backdrops';
 import { Equipment } from '../character/equipment';
 import { loadPortraits } from '../character/portraits';
 import { buildCharacterScene, type CharacterRig } from '../character/scene';
+import { type FightSoundChoice, loadFightSounds, Sounds } from '../character/sounds';
 import { Database } from '../db2/database';
 import { Definitions } from '../db2/definitions';
 import { decodeBlp, type Image } from '../formats/blp';
@@ -20,6 +21,7 @@ let appearance: Promise<Appearance> | undefined;
 let equipment: Promise<Equipment> | undefined;
 let screens: Promise<LoadingScreen[]> | undefined;
 let portraits: Promise<Portraits> | undefined;
+let sounds: Promise<Sounds> | undefined;
 // The character last built, kept so it can be posed again without rebuilding.
 let rig: CharacterRig | undefined;
 
@@ -73,6 +75,7 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       equipment = undefined;
       screens = undefined;
       portraits = undefined;
+      sounds = undefined;
       rig = undefined;
       const value: OpenResult = {
         info: storage.info,
@@ -134,6 +137,27 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       if (!rig) throw new Error('No character has been built');
       const value = await rig.pose(request.sequence, request.time);
       return { value, transfer: value.meshes.flatMap((mesh) => [mesh.bones.buffer, mesh.transform.buffer]) as Transferable[] };
+    }
+    case 'sounds': {
+      if (!storage || !database) throw new Error('No folder is open');
+      sounds ??= Sounds.load(database);
+      let table: Sounds;
+      try {
+        table = await sounds;
+      } catch (error) {
+        sounds = undefined;
+        throw error;
+      }
+      const choice: FightSoundChoice = { raceId: request.raceId, sex: request.sex };
+      if (request.classId !== undefined) choice.classId = request.classId;
+      if (request.wielding !== undefined) choice.wielding = request.wielding;
+      const subclass = request.mainHand === undefined ? undefined : (await loadEquipment()).weaponSubclass(request.mainHand);
+      if (subclass !== undefined) choice.weaponSubclass = subclass;
+      const value = await loadFightSounds(storage, table, choice);
+      // The archives are read again for the next request: every clip's bytes move to the page.
+      const buffers = new Set<ArrayBufferLike>();
+      for (const kit of Object.values(value.kits)) for (const clip of kit.clips) buffers.add(clip.bytes.buffer);
+      return { value, transfer: [...buffers] as Transferable[] };
     }
     case 'searchItems': {
       const value: ItemSearchResult = (await loadEquipment()).search(request.slot, request.query);
