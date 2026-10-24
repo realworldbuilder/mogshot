@@ -10,12 +10,13 @@ import { Creatures } from '../character/creatures';
 import { humanoidLook } from '../character/npc';
 import { buildCharacterScene, type CharacterRig } from '../character/scene';
 import { type FightSoundChoice, loadFightSounds, Sounds } from '../character/sounds';
+import { SpellIcons } from '../character/spell-icons';
 import { Database } from '../db2/database';
 import { Definitions } from '../db2/definitions';
 import { decodeBlp, type Image } from '../formats/blp';
 import { resolveImport } from '../import/resolve';
 import { FileListSource } from '../io/file-list-source';
-import type { CharacterResult, CreatureLook, FighterResult, IconResult, ItemSearchResult, MapSummary, OpenResult, Portraits, Request, Response } from './api';
+import type { CharacterResult, CreatureLook, FighterResult, IconResult, ItemIcon, ItemSearchResult, MapSummary, OpenResult, Portraits, Request, Response } from './api';
 
 let storage: CascStorage | undefined;
 let database: Database | undefined;
@@ -25,6 +26,7 @@ let screens: Promise<LoadingScreen[]> | undefined;
 let portraits: Promise<Portraits> | undefined;
 let sounds: Promise<Sounds> | undefined;
 let creatures: Promise<Creatures> | undefined;
+let spellIcons: Promise<SpellIcons> | undefined;
 // The character last built, kept so it can be posed again without rebuilding.
 let rig: CharacterRig | undefined;
 
@@ -268,6 +270,21 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       const file = request.fileId ? await storage.readFile(request.fileId) : undefined;
       const value: IconResult = file && decodeBlp(file.data);
       return { value, transfer: value ? [value.pixels.buffer] : [] };
+    }
+    case 'spellIcons': {
+      if (!database) throw new Error('No folder is open');
+      spellIcons ??= SpellIcons.load(database);
+      try {
+        return { value: (await spellIcons).find(request.names) };
+      } catch (error) {
+        spellIcons = undefined;
+        throw error;
+      }
+    }
+    case 'itemIcons': {
+      const items = await loadEquipment();
+      const value: ItemIcon[] = request.ids.map((id) => ({ id, fileId: items.resolveItem(id)?.iconFileId ?? 0 }));
+      return { value };
     }
   }
 }

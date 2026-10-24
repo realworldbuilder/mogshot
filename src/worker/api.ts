@@ -9,6 +9,7 @@ import type { Image } from '../formats/blp';
 import type { CharacterScene, PackedRig, PoseRequest, PoseResult } from '../character/scene';
 import type { PickedFile } from '../io/file-list-source';
 import type { FightSoundName, FightSoundSet, SoundClip, SoundKitClips } from '../character/sounds';
+import type { SpellIcon } from '../character/spell-icons';
 import type { ImportedRecord } from '../import/record';
 import type { ImportResult } from '../import/resolve';
 
@@ -68,6 +69,10 @@ export type Request =
   | { id: number; method: 'sets'; classId: number }
   | { id: number; method: 'randomOutfit'; minQuality: number }
   | { id: number; method: 'icon'; fileId: number }
+  /** The icon file ids of spells by name, for an action bar; read through 'icon'. */
+  | { id: number; method: 'spellIcons'; names: string[] }
+  /** The icon file ids of items by id. */
+  | { id: number; method: 'itemIcons'; ids: number[] }
   | { id: number; method: 'backdrops' }
   | { id: number; method: 'place'; map: number; x: number; y: number; facing: number; reach: number; z?: number }
   | { id: number; method: 'maps' }
@@ -82,6 +87,12 @@ export interface ItemSearchResult {
 /** An icon's pixels, or undefined if the file cannot be read. */
 export type IconResult = Image | undefined;
 
+/** An item's icon file id, or 0 when the item is unknown or has none. */
+export interface ItemIcon {
+  id: number;
+  fileId: number;
+}
+
 /** A map whose outdoor world this install has on disk. */
 export interface MapSummary {
   /** The game's map id: 0 Eastern Kingdoms, 1 Kalimdor, 530 Outland, 571 Northrend. */
@@ -89,7 +100,7 @@ export interface MapSummary {
   name: string;
 }
 
-export type { FightSoundName, FightSoundSet, SoundClip, SoundKitClips };
+export type { FightSoundName, FightSoundSet, SoundClip, SoundKitClips, SpellIcon };
 export type { ClassEntry, ClassInfo, ImportedRecord, ImportResult, ItemSetInfo, ItemSummary, LoadingScreen, PackedRig, Portraits, PoseRequest, PoseResult, Race, Slot, WeaponKind };
 
 export interface CharacterResult {

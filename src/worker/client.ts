@@ -12,6 +12,7 @@ import type {
   ItemSetInfo,
   ItemSummary,
   IconResult,
+  ItemIcon,
   ItemSearchResult,
   LoadingScreen,
   OpenResult,
@@ -22,6 +23,7 @@ import type {
   Request,
   Response,
   Slot,
+  SpellIcon,
   WeaponKind,
   MapSummary,
 } from './api';
@@ -141,6 +143,16 @@ export class DataClient {
   /** An icon's or a loading screen's pixels. */
   icon(fileId: number): Promise<IconResult> {
     return this.call({ method: 'icon', fileId });
+  }
+
+  /** The icon file ids of spells by name, in the order asked; 0 for a name no spell has. The pixels come from `icon`. */
+  spellIcons(names: string[]): Promise<SpellIcon[]> {
+    return this.call({ method: 'spellIcons', names });
+  }
+
+  /** The icon file ids of items by id, in the order asked; 0 for an unknown item. */
+  itemIcons(ids: number[]): Promise<ItemIcon[]> {
+    return this.call({ method: 'itemIcons', ids });
   }
 
   /** The game world around a spot, for the character to stand in. `facing` is in radians; `z` picks a floor. */
