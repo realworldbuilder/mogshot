@@ -11,6 +11,7 @@ import { humanoidLook } from '../character/npc';
 import { buildCharacterScene, type CharacterRig } from '../character/scene';
 import { type FightSoundChoice, loadFightSounds, Sounds } from '../character/sounds';
 import { SpellIcons } from '../character/spell-icons';
+import { buildSpellModel, type SpellModel, SpellVisuals } from '../character/spell-visuals';
 import { Database } from '../db2/database';
 import { Definitions } from '../db2/definitions';
 import { decodeBlp, type Image } from '../formats/blp';
@@ -27,6 +28,7 @@ let portraits: Promise<Portraits> | undefined;
 let sounds: Promise<Sounds> | undefined;
 let creatures: Promise<Creatures> | undefined;
 let spellIcons: Promise<SpellIcons> | undefined;
+let spellVisuals: Promise<SpellVisuals> | undefined;
 // The character last built, kept so it can be posed again without rebuilding.
 let rig: CharacterRig | undefined;
 
@@ -94,6 +96,8 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       portraits = undefined;
       sounds = undefined;
       creatures = undefined;
+      spellIcons = undefined;
+      spellVisuals = undefined;
       rig = undefined;
       const value: OpenResult = {
         info: storage.info,
@@ -286,6 +290,33 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
         spellIcons = undefined;
         throw error;
       }
+    }
+    case 'spellVisuals': {
+      if (!database) throw new Error('No folder is open');
+      spellVisuals ??= SpellVisuals.load(database);
+      try {
+        return { value: (await spellVisuals).find(request.spells) };
+      } catch (error) {
+        spellVisuals = undefined;
+        throw error;
+      }
+    }
+    case 'spellModels': {
+      if (!storage) throw new Error('No folder is open');
+      const value: SpellModel[] = [];
+      for (const fileId of request.fileIds) {
+        const model = await buildSpellModel(storage, fileId).catch(() => undefined);
+        if (model) value.push(model);
+      }
+      // Nothing is kept here: every buffer moves to the page.
+      const buffers = new Set<ArrayBufferLike>();
+      for (const { scene, rig } of value) {
+        for (const texture of scene.textures) buffers.add(texture.pixels.buffer);
+        for (const mesh of scene.meshes) buffers.add(mesh.vertices.buffer).add(mesh.indices.buffer).add(mesh.bones.buffer).add(mesh.transform.buffer);
+        buffers.add(rig.body.md20.buffer);
+        for (const [, keys] of rig.anims) buffers.add(keys.buffer);
+      }
+      return { value, transfer: [...buffers] as Transferable[] };
     }
     case 'itemIcons': {
       const items = await loadEquipment();

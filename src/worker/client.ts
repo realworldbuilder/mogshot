@@ -24,6 +24,8 @@ import type {
   Response,
   Slot,
   SpellIcon,
+  SpellModel,
+  SpellVisual,
   WeaponKind,
   MapSummary,
 } from './api';
@@ -158,6 +160,16 @@ export class DataClient {
   /** The icon file ids of items by id, in the order asked; 0 for an unknown item. */
   itemIcons(ids: number[]): Promise<ItemIcon[]> {
     return this.call({ method: 'itemIcons', ids });
+  }
+
+  /** What spells look like as models: by name, with spell ids to try before the name. */
+  spellVisuals(spells: { name: string; ids?: number[] }[]): Promise<SpellVisual[]> {
+    return this.call({ method: 'spellVisuals', spells });
+  }
+
+  /** Spell models built to draw and pose with model/posable; those with no mesh are left out. */
+  spellModels(fileIds: number[]): Promise<SpellModel[]> {
+    return this.call({ method: 'spellModels', fileIds });
   }
 
   /** The game world around a spot, for the character to stand in. `facing` is in radians; `z` picks a floor. */

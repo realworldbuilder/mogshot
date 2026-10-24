@@ -10,6 +10,7 @@ import type { CharacterScene, PackedRig, PoseRequest, PoseResult } from '../char
 import type { PickedFile } from '../io/file-list-source';
 import type { FightSoundName, FightSoundSet, SoundClip, SoundKitClips } from '../character/sounds';
 import type { SpellIcon } from '../character/spell-icons';
+import type { SpellModel, SpellVisual } from '../character/spell-visuals';
 import type { ImportedRecord } from '../import/record';
 import type { ImportResult } from '../import/resolve';
 
@@ -73,6 +74,10 @@ export type Request =
   | { id: number; method: 'spellIcons'; names: string[] }
   /** The icon file ids of items by id. */
   | { id: number; method: 'itemIcons'; ids: number[] }
+  /** What spells look like as models, by name, with spell ids to try first: the missile and the models of each moment of the cast. */
+  | { id: number; method: 'spellVisuals'; spells: { name: string; ids?: number[] }[] }
+  /** Spell models built to draw and pose, by file id; one with no mesh, or not on disk, is left out. */
+  | { id: number; method: 'spellModels'; fileIds: number[] }
   /** A file's bytes as stored, by file id: a font for the page to load, say. Undefined when it is not on disk. */
   | { id: number; method: 'file'; fileId: number }
   | { id: number; method: 'backdrops' }
@@ -102,7 +107,7 @@ export interface MapSummary {
   name: string;
 }
 
-export type { FightSoundName, FightSoundSet, SoundClip, SoundKitClips, SpellIcon };
+export type { FightSoundName, FightSoundSet, SoundClip, SoundKitClips, SpellIcon, SpellModel, SpellVisual };
 export type { ClassEntry, ClassInfo, ImportedRecord, ImportResult, ItemSetInfo, ItemSummary, LoadingScreen, PackedRig, Portraits, PoseRequest, PoseResult, Race, Slot, WeaponKind };
 
 export interface CharacterResult {
