@@ -41,6 +41,14 @@ describe('factionOf and raceKey', () => {
     expect(raceKey('NightElf')).toBe('nightelf');
     expect(raceKey('Scourge')).toBe('undead');
     expect(raceKey('BloodElf')).toBe('bloodelf');
+    // Retail's atlas shortens some two-word names and spells the Haranir the old way in the file name.
+    expect(raceKey('Harronir')).toBe('haranir');
+    expect(raceKey('HighmountainTauren')).toBe('highmountain');
+    expect(raceKey('LightforgedDraenei')).toBe('lightforged');
+    expect(raceKey('EarthenDwarf')).toBe('earthen');
+    expect(raceKey('ZandalariTroll')).toBe('zandalari');
+    expect(raceKey('DarkIronDwarf')).toBe('darkirondwarf');
+    expect(raceKey('Dracthyr')).toBe('dracthyr');
   });
 });
 

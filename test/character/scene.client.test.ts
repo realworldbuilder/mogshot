@@ -33,6 +33,10 @@ describe.skipIf(!hasClient)('human male scene', () => {
     scene.textures.forEach((texture, i) => writePng(`test-results/scene/texture-${i}.png`, texture));
   }, 120_000);
 
+  it('reports no slot the game composes but nothing paints: such a slot is empty in the game too', () => {
+    expect(scene.problems.filter((problem) => problem.includes('needs a texture for slot'))).toEqual([]);
+  });
+
   it('offers the human male options with available choices', () => {
     const model = appearance.model(1, 0)!;
     const options = appearance.options(model.chrModelId);

@@ -276,6 +276,16 @@ export class Appearance {
     return this.slotSizes.get(`${model.layoutId}:${SLOT_SKIN}`);
   }
 
+  /**
+   * The texture types the game composes for the model from its choices and gear (ChrModelMaterial's
+   * rows for the model's layout): skin, hair, eyes, and the slots of some races' extras, such as the
+   * night elf blindfold. A type with no layer from the choices is an empty picture in the game, not a fault.
+   */
+  slotTypes(model: CharacterModel): number[] {
+    const prefix = `${model.layoutId}:`;
+    return [...this.slotSizes.keys()].filter((key) => key.startsWith(prefix)).map((key) => Number(key.slice(prefix.length)));
+  }
+
   /** The first available choice of every option. */
   defaultChoices(chrModelId: number): Map<number, number> {
     const chosen = new Map<number, number>();

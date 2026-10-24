@@ -318,6 +318,12 @@ export interface SceneBuilder {
   textures: SceneTexture[];
   /** Textures composited for the body's slots (skin, hair ...), by texture type; filled before meshes are built. */
   slots: Map<number, Image>;
+  /**
+   * Slots the game composes for this body but nothing paints: a texture type the model's layout
+   * lists with no layer from the choices or gear, the night elf blindfold's slot on a night elf
+   * with no blindfold. A geoset drawn with one is left out, as the game's own picture of it is empty.
+   */
+  emptySlots: Set<number>;
   /** Bone adjustments (face shapes) merged before posing. */
   boneOffsets: BoneOffsets;
   /** A hand closed around what it holds: the hands-closed sequence and the finger bones that take it. */
@@ -385,9 +391,13 @@ export function sceneReaders(storage: CascStorage): SceneReaders {
   return readers;
 }
 
+/** What `textureFor` answers for a slot the game composes but nothing paints: the batch is not drawn. */
+const EMPTY = -2;
+
 function sceneBuilder(storage: CascStorage, readers: SceneReaders, model: M2Model, scale: number): SceneBuilder {
   const { problems, image } = readers;
   const slots = new Map<number, Image>();
+  const emptySlots = new Set<number>();
 
   // Scene textures are shared between meshes: a slot (skin, hair ...) or a file is uploaded once.
   const textures: SceneTexture[] = [];
@@ -414,6 +424,7 @@ function sceneBuilder(storage: CascStorage, readers: SceneReaders, model: M2Mode
     if (fileId) picture = await image(fileId, owner ? 'A texture' : 'A model texture');
     else {
       picture = slots.get(texture.type);
+      if (!picture && emptySlots.has(texture.type)) return EMPTY;
       if (!picture) problems.push(`${of} ${sectionId} needs a texture for slot ${texture.type}, and nothing fills it`);
     }
     let index = -1;
@@ -444,6 +455,8 @@ function sceneBuilder(storage: CascStorage, readers: SceneReaders, model: M2Mode
         const modelTexture = source.textureCombos[batch.textureComboIndex + stage];
         stageTextures.push(modelTexture === undefined ? -1 : await textureFor(source, modelTexture, section.id, owner, overrides));
       }
+      // A batch that wants a slot the game left empty draws nothing, as it does in the game.
+      if (stageTextures.includes(EMPTY)) continue;
       draws.push({
         sectionId: section.id,
         indexStart: section.indexStart,
@@ -497,6 +510,7 @@ function sceneBuilder(storage: CascStorage, readers: SceneReaders, model: M2Mode
   const builder: SceneBuilder = {
     textures,
     slots,
+    emptySlots,
     boneOffsets: new Map(),
     gripping: undefined,
     buildMesh,
@@ -717,6 +731,13 @@ export async function buildCharacterScene(
       blendMode: layer.blendMode,
     }));
     slots.set(type, composite(first.layer.canvasWidth * scale, first.layer.canvasHeight * scale, layers));
+  }
+  // The slots the game composes for this body that no choice or item paints: empty pictures in
+  // the game too, so a geoset drawn with one is left out. A slot whose layers exist but could
+  // not be read is a missing file, said above; its geosets still draw, blank. The skin always draws.
+  const painted = new Set(resolved.layers.map((layer) => layer.textureType));
+  for (const type of appearance.slotTypes(characterModel)) {
+    if (type !== SLOT_SKIN && !slots.has(type) && !painted.has(type)) builder.emptySlots.add(type);
   }
 
   // An item with no model of its own can still fill one of the character's slots: a cloak's cloth.

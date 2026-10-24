@@ -47,8 +47,19 @@ export function factionOf(alliance: unknown): Faction {
   return FACTIONS[Number(alliance)] ?? 'unknown';
 }
 
-/** The atlas names a race by its file name in lower case, except the Undead, whose file name is Scourge. */
-const KEY_EXCEPTIONS: Record<string, string> = { scourge: 'undead' };
+/**
+ * The atlas names a race by its file name in lower case, except these: the Undead, whose file
+ * name is Scourge, and the races the atlas calls by one word where the file name has two (the
+ * raceicon128-* members of retail 12.1.5; the Haranir's file name is still spelt Harronir there).
+ */
+const KEY_EXCEPTIONS: Record<string, string> = {
+  scourge: 'undead',
+  harronir: 'haranir',
+  highmountaintauren: 'highmountain',
+  lightforgeddraenei: 'lightforged',
+  earthendwarf: 'earthen',
+  zandalaritroll: 'zandalari',
+};
 
 export function raceKey(file: string): string {
   const key = file.toLowerCase();
