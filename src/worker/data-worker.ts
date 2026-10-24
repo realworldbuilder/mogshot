@@ -15,7 +15,7 @@ import { Definitions } from '../db2/definitions';
 import { decodeBlp, type Image } from '../formats/blp';
 import { resolveImport } from '../import/resolve';
 import { FileListSource } from '../io/file-list-source';
-import type { CharacterResult, CreatureLook, FighterResult, IconResult, ItemSearchResult, OpenResult, Portraits, Request, Response } from './api';
+import type { CharacterResult, CreatureLook, FighterResult, IconResult, ItemSearchResult, MapSummary, OpenResult, Portraits, Request, Response } from './api';
 
 let storage: CascStorage | undefined;
 let database: Database | undefined;
@@ -234,11 +234,22 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       const maps = await database.table('Map', ['WdtFileDataID']);
       const wdtFileId = Number(maps.rows.find((row) => Number(row.ID) === request.map)?.WdtFileDataID ?? 0);
       if (!wdtFileId) throw new Error(`Map ${request.map} has no outdoor world in this build`);
-      const value = await buildPlace(storage, { wdtFileId, x: request.x, y: request.y, facing: request.facing, reach: request.reach });
+      const value = await buildPlace(storage, { wdtFileId, x: request.x, y: request.y, z: request.z, facing: request.facing, reach: request.reach });
       const buffers = new Set<ArrayBufferLike>();
       for (const mesh of [...value.meshes, ...value.terrain, ...value.props]) buffers.add(mesh.vertices.buffer).add(mesh.indices.buffer);
       for (const image of [...value.textures, ...value.propTextures, ...value.terrain.map((mesh) => mesh.blend)]) buffers.add(image.pixels.buffer);
       return { value, transfer: [...buffers] as Transferable[] };
+    }
+    case 'maps': {
+      if (!database || !storage) throw new Error('No folder is open');
+      const maps = await database.table('Map', ['MapName_lang', 'WdtFileDataID']);
+      const files = storage.files;
+      const value: MapSummary[] = [];
+      for (const row of maps.rows) {
+        const wdtFileId = Number(row.WdtFileDataID);
+        if (wdtFileId && files.find(wdtFileId)) value.push({ id: Number(row.ID), name: String(row.MapName_lang ?? '') });
+      }
+      return { value };
     }
     case 'backdrops': {
       if (!database || !storage) throw new Error('No folder is open');

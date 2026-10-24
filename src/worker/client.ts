@@ -23,6 +23,7 @@ import type {
   Response,
   Slot,
   WeaponKind,
+  MapSummary,
 } from './api';
 
 /** An error the worker raised. `install` means the folder itself is the problem. */
@@ -142,9 +143,14 @@ export class DataClient {
     return this.call({ method: 'icon', fileId });
   }
 
-  /** The game world around a spot, for the character to stand in. `facing` is in radians. */
-  place(map: number, x: number, y: number, facing: number, reach: number): Promise<PlaceScene> {
-    return this.call({ method: 'place', map, x, y, facing, reach });
+  /** The game world around a spot, for the character to stand in. `facing` is in radians; `z` picks a floor. */
+  place(map: number, x: number, y: number, facing: number, reach: number, z?: number): Promise<PlaceScene> {
+    return this.call({ method: 'place', map, x, y, facing, reach, z });
+  }
+
+  /** The maps whose outdoor world this install has on disk, by the game's map id. */
+  maps(): Promise<MapSummary[]> {
+    return this.call({ method: 'maps' });
   }
 
   /** The game's loading screens, by name. */

@@ -12,6 +12,15 @@ import {
 } from './shaders';
 
 /** Where the camera is, as an orbit around the character. Angles in radians. */
+/** A soft disc of shade on the ground of a place, in the character's space. */
+export interface Shadow {
+  x: number;
+  y: number;
+  /** Height of the ground there; 0 when left out. */
+  z?: number;
+  radius: number;
+}
+
 export interface Camera {
   /** Rotation around the vertical axis; 0 looks at the character's front. */
   yaw: number;
@@ -149,6 +158,7 @@ export class CharacterRenderer {
   private bounds: CharacterScene['bounds'] = { min: [0, 0, 0], max: [0, 0, 0] };
   /** The box the camera frames while a clip plays, in place of each pose's own. */
   private framing: CharacterScene['bounds'] | undefined;
+  private shadows: Shadow[] | undefined;
   /** Problems found while preparing the scene for drawing (unknown shaders and the like). */
   problems: string[] = [];
   /** Problems found while preparing the place. */
@@ -397,6 +407,14 @@ export class CharacterRenderer {
   /** Leave the character and its shadow out: a place with nobody in it. The camera is framed as if it were there. */
   hideCharacter(hidden: boolean): void {
     this.hidden = hidden;
+  }
+
+  /**
+   * Where the shadows fall in a place: one disc per body, in the character's space, instead of the
+   * one under the framed box. For several characters drawn as one scene, each standing somewhere else.
+   */
+  setShadows(shadows: Shadow[] | undefined): void {
+    this.shadows = shadows;
   }
 
   /** Draw the scene to the canvas. The canvas's pixel size is used as it is. */
@@ -793,16 +811,20 @@ export class CharacterRenderer {
         // The character's shadow lies on the solid ground, under any water or glass.
         if (this.draws.length > 0 && !this.hidden) {
           const { min, max } = this.framing ?? this.bounds;
-          const radius = Math.max(max[0] - min[0], max[1] - min[1]) * 0.6;
-          const shadow = new Float32Array([radius, 0, 0, 0, 0, radius, 0, 0, 0, 0, 1, 0, (min[0] + max[0]) / 2, (min[1] + max[1]) / 2, 0, 1]);
+          const discs = this.shadows ?? [
+            { x: (min[0] + max[0]) / 2, y: (min[1] + max[1]) / 2, z: 0, radius: Math.max(max[0] - min[0], max[1] - min[1]) * 0.6 },
+          ];
           gl.bindVertexArray(this.shadowQuad);
-          gl.uniformMatrix4fv(model, false, shadow);
           gl.uniform1i(at('u_shadow'), 1);
           gl.disable(gl.CULL_FACE);
           // Lifted a little toward the camera so it does not flicker against the ground it lies on.
           gl.enable(gl.POLYGON_OFFSET_FILL);
           gl.polygonOffset(-2, -8);
-          gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+          for (const disc of discs) {
+            const shadow = new Float32Array([disc.radius, 0, 0, 0, 0, disc.radius, 0, 0, 0, 0, 1, 0, disc.x, disc.y, disc.z ?? 0, 1]);
+            gl.uniformMatrix4fv(model, false, shadow);
+            gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+          }
           gl.disable(gl.POLYGON_OFFSET_FILL);
           gl.uniform1i(at('u_shadow'), 0);
         }

@@ -69,7 +69,8 @@ export type Request =
   | { id: number; method: 'randomOutfit'; minQuality: number }
   | { id: number; method: 'icon'; fileId: number }
   | { id: number; method: 'backdrops' }
-  | { id: number; method: 'place'; map: number; x: number; y: number; facing: number; reach: number }
+  | { id: number; method: 'place'; map: number; x: number; y: number; facing: number; reach: number; z?: number }
+  | { id: number; method: 'maps' }
   | { id: number; method: 'resolveImport'; record: ImportedRecord };
 
 export interface ItemSearchResult {
@@ -80,6 +81,13 @@ export interface ItemSearchResult {
 
 /** An icon's pixels, or undefined if the file cannot be read. */
 export type IconResult = Image | undefined;
+
+/** A map whose outdoor world this install has on disk. */
+export interface MapSummary {
+  /** The game's map id: 0 Eastern Kingdoms, 1 Kalimdor, 530 Outland, 571 Northrend. */
+  id: number;
+  name: string;
+}
 
 export type { FightSoundName, FightSoundSet, SoundClip, SoundKitClips };
 export type { ClassEntry, ClassInfo, ImportedRecord, ImportResult, ItemSetInfo, ItemSummary, LoadingScreen, PackedRig, Portraits, PoseRequest, PoseResult, Race, Slot, WeaponKind };
