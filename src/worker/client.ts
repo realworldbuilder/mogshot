@@ -4,6 +4,7 @@ import type { PickedFile } from '../io/file-list-source';
 import type {
   CharacterResult,
   ClassEntry,
+  CreatureLook,
   FighterResult,
   FightSoundSet,
   ImportedRecord,
@@ -84,9 +85,18 @@ export class DataClient {
   }
 
   /** Pose the character last built at a moment of one of its sequences. */
-  /** Build a character and hand over everything needed to pose it on this thread, with the named animations ready. */
-  fighter(raceId: number, sex: number, choices: [number, number][], gear: [Slot, number][], animations: string[]): Promise<FighterResult> {
-    return this.call({ method: 'fighter', raceId, sex, choices, gear, animations });
+  /**
+   * Build a character and hand over everything needed to pose it on this thread, with the
+   * named animations ready. With `npc`, a creature display id, the NPC is built as the game
+   * draws it and `raceId` and `sex` are ignored.
+   */
+  fighter(raceId: number, sex: number, choices: [number, number][], gear: [Slot, number][], animations: string[], npc?: number): Promise<FighterResult> {
+    return this.call({ method: 'fighter', raceId, sex, choices, gear, animations, ...(npc !== undefined && { npc }) });
+  }
+
+  /** The creature displays the open folder has among `ids`, in that order, with the race and sex of each one drawn on a player model. */
+  creatureDisplays(ids: number[]): Promise<CreatureLook[]> {
+    return this.call({ method: 'creatureDisplays', ids });
   }
 
   /**

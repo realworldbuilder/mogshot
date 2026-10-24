@@ -1,5 +1,6 @@
 import type { Appearance, Option, Race } from '../src/character/appearance';
 import type { LoadingScreen } from '../src/character/backdrops';
+import { humanoidLook } from '../src/character/npc';
 import type { CreatureDisplay, Creatures } from '../src/character/creatures';
 import type { TransmogSetInfo, TransmogSets } from '../src/character/transmog';
 import { type ClassInfo, type Equipment, type ItemSummary, type Slot, SLOTS } from '../src/character/equipment';
@@ -417,25 +418,15 @@ export function resolveSpec(spec: Spec, world: World): Shot {
       if (!display.modelFileId) throw new Error(`${name} has no model in the game data`);
       creature = { fileId: display.modelFileId, textures: display.textures, scale: display.scale };
     } else {
-      raceId = humanoid.raceId;
-      sex = humanoid.sex;
-      const model = appearance.model(raceId, sex);
-      if (!model) throw new Error(`${name} is drawn as race ${raceId}, ${sex === 1 ? 'female' : 'male'}, which this build has no player model for`);
-      if (display.modelFileId !== model.fileId) {
-        problems.push(`The game draws ${name} with model file ${display.modelFileId}, not the player model (file ${model.fileId}) drawn here`);
-      }
-      for (const [option, choice] of humanoid.choices) choices.set(option, choice);
-      for (const [slot, displayId] of humanoid.wear) wear.set(slot, displayId);
+      const look = humanoidLook(display, appearance, world.installed, name);
+      raceId = look.raceId;
+      sex = look.sex;
+      for (const [option, choice] of look.choices) choices.set(option, choice);
+      for (const [slot, displayId] of look.wear) wear.set(slot, displayId);
+      bake = look.bake;
+      problems.push(...look.problems);
       optionsOf = (chrModelId) => appearance.options(chrModelId);
       if (spec.choices) notes.push('Skin and face choices paint the body texture, which an NPC\'s painted body (the bake) replaces');
-      // The bake made for the model's texture size, if it is on disk; else the other one.
-      const hd = (appearance.skinSize(model)?.width ?? 0) >= 2048;
-      const [wanted, other] = hd ? [humanoid.hdBakeFileId, humanoid.bakeFileId] : [humanoid.bakeFileId, humanoid.hdBakeFileId];
-      if (wanted && world.installed(wanted)) bake = wanted;
-      else if (other && world.installed(other)) {
-        bake = other;
-        problems.push(`The ${hd ? 'high-res' : 'standard'} painted body of ${name} (file ${wanted || 'none listed'}) is not on disk, so the ${hd ? 'standard' : 'high-res'} one is drawn`);
-      } else if (wanted || other) problems.push(`No painted body of ${name} is on disk (files ${[wanted, other].filter(Boolean).join(', ')}); the skin is drawn from the choices instead`);
     }
   }
   if (spec.character !== undefined) {

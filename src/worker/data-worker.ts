@@ -6,6 +6,8 @@ import { Appearance } from '../character/appearance';
 import { type LoadingScreen, loadLoadingScreens } from '../character/backdrops';
 import { Equipment } from '../character/equipment';
 import { loadPortraits } from '../character/portraits';
+import { Creatures } from '../character/creatures';
+import { humanoidLook } from '../character/npc';
 import { buildCharacterScene, type CharacterRig } from '../character/scene';
 import { type FightSoundChoice, loadFightSounds, Sounds } from '../character/sounds';
 import { Database } from '../db2/database';
@@ -13,7 +15,7 @@ import { Definitions } from '../db2/definitions';
 import { decodeBlp, type Image } from '../formats/blp';
 import { resolveImport } from '../import/resolve';
 import { FileListSource } from '../io/file-list-source';
-import type { CharacterResult, FighterResult, IconResult, ItemSearchResult, OpenResult, Portraits, Request, Response } from './api';
+import type { CharacterResult, CreatureLook, FighterResult, IconResult, ItemSearchResult, OpenResult, Portraits, Request, Response } from './api';
 
 let storage: CascStorage | undefined;
 let database: Database | undefined;
@@ -22,6 +24,7 @@ let equipment: Promise<Equipment> | undefined;
 let screens: Promise<LoadingScreen[]> | undefined;
 let portraits: Promise<Portraits> | undefined;
 let sounds: Promise<Sounds> | undefined;
+let creatures: Promise<Creatures> | undefined;
 // The character last built, kept so it can be posed again without rebuilding.
 let rig: CharacterRig | undefined;
 
@@ -59,6 +62,18 @@ async function loadEquipment(): Promise<Equipment> {
   }
 }
 
+/** The creature data (NPC displays), loaded from the database the first time it is needed. */
+async function loadCreatures(): Promise<Creatures> {
+  if (!database) throw new Error('No folder is open');
+  creatures ??= Creatures.load(database);
+  try {
+    return await creatures;
+  } catch (error) {
+    creatures = undefined;
+    throw error;
+  }
+}
+
 async function handle(request: Request): Promise<{ value: unknown; transfer?: Transferable[] }> {
   switch (request.method) {
     case 'open': {
@@ -76,6 +91,7 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       screens = undefined;
       portraits = undefined;
       sounds = undefined;
+      creatures = undefined;
       rig = undefined;
       const value: OpenResult = {
         info: storage.info,
@@ -113,17 +129,28 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
     case 'fighter': {
       if (!storage) throw new Error('No folder is open');
       const start = performance.now();
-      const items = request.gear.length > 0 ? await loadEquipment() : undefined;
-      const built = await buildCharacterScene(storage, await loadAppearance(), items, {
-        raceId: request.raceId,
-        sex: request.sex,
-        choices: new Map(request.choices),
+      const appearance = await loadAppearance();
+      // The item tables are only read once something is worn: items given, or an NPC's own looks.
+      const items = request.gear.length > 0 || request.npc !== undefined ? await loadEquipment() : undefined;
+      // An NPC: the race, sex, choices, worn looks and painted body its display names, with the request's choices over them.
+      let who = { raceId: request.raceId, sex: request.sex, choices: new Map(request.choices) };
+      let look: ReturnType<typeof humanoidLook> | undefined;
+      if (request.npc !== undefined) {
+        const display = (await loadCreatures()).display(request.npc);
+        if (!display) throw new Error(`There is no creature display ${request.npc} in this game folder`);
+        look = humanoidLook(display, appearance, (fileId) => storage!.files.find(fileId) !== undefined);
+        who = { raceId: look.raceId, sex: look.sex, choices: new Map([...look.choices, ...request.choices]) };
+      }
+      const built = await buildCharacterScene(storage, appearance, items, {
+        ...who,
         gear: new Map(request.gear),
+        ...(look && { wear: look.wear, bake: look.bake, scale: look.scale }),
         pose: { preset: 'Stand' },
       });
       const packed = await built.pack(request.animations);
       const { scene } = built;
-      const value: FighterResult = { scene, rig: packed, wielding: built.wielding, ms: performance.now() - start };
+      if (look) scene.problems.push(...look.problems);
+      const value: FighterResult = { scene, rig: packed, wielding: built.wielding, raceId: who.raceId, sex: who.sex, ms: performance.now() - start };
       // Nothing of this character is kept here: every buffer moves to the page.
       const buffers = new Set<ArrayBufferLike>(scene.textures.map((texture) => texture.pixels.buffer));
       for (const mesh of scene.meshes) buffers.add(mesh.vertices.buffer).add(mesh.indices.buffer).add(mesh.bones.buffer).add(mesh.transform.buffer);
@@ -132,6 +159,17 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       for (const [, matrix] of packed.boneOffsets) buffers.add(matrix.buffer);
       for (const mesh of packed.meshes) if (mesh.follows === 'attachment') buffers.add(mesh.own.buffer);
       return { value, transfer: [...buffers] as Transferable[] };
+    }
+    case 'creatureDisplays': {
+      const table = await loadCreatures();
+      const value: CreatureLook[] = [];
+      for (const id of request.ids) {
+        const display = table.display(id);
+        if (!display) continue;
+        const { humanoid } = display;
+        value.push({ id, scale: display.scale, ...(humanoid && { humanoid: { raceId: humanoid.raceId, sex: humanoid.sex } }) });
+      }
+      return { value };
     }
     case 'pose': {
       if (!rig) throw new Error('No character has been built');

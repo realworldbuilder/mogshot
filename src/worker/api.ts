@@ -42,7 +42,15 @@ export type Request =
       gear: [slot: Slot, itemId: number][];
       /** The animations whose keys are read in advance, so the character can be posed in them at once. */
       animations: string[];
+      /**
+       * A creature display id: the NPC is built as the game draws it, on the race, sex,
+       * appearance choices, item looks and painted body its display names; `raceId` and
+       * `sex` are then ignored and `choices` go over the NPC's own. Only a display drawn on a
+       * player model works; one with a model of its own is an error.
+       */
+      npc?: number;
     }
+  | { id: number; method: 'creatureDisplays'; ids: number[] }
   | {
       id: number;
       method: 'sounds';
@@ -86,7 +94,19 @@ export interface FighterResult {
   scene: CharacterScene;
   rig: PackedRig;
   wielding: WeaponKind | 'unarmed';
+  /** The race and sex built: the request's, or for an NPC the ones its display is drawn on. */
+  raceId: number;
+  sex: number;
   ms: number;
+}
+
+/** What the open folder knows of a creature display, for choosing NPCs to offer. */
+export interface CreatureLook {
+  id: number;
+  /** The game's size for it. */
+  scale: number;
+  /** Set when the display is drawn on a player model, which is the only kind a fighter can be built from. */
+  humanoid?: { raceId: number; sex: number };
 }
 
 export type Response =
