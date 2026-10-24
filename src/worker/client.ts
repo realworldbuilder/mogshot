@@ -150,6 +150,11 @@ export class DataClient {
     return this.call({ method: 'spellIcons', names });
   }
 
+  /** A file's bytes by file id, or undefined when this install does not have it: the game's fonts, for instance. */
+  file(fileId: number): Promise<Uint8Array | undefined> {
+    return this.call({ method: 'file', fileId });
+  }
+
   /** The icon file ids of items by id, in the order asked; 0 for an unknown item. */
   itemIcons(ids: number[]): Promise<ItemIcon[]> {
     return this.call({ method: 'itemIcons', ids });

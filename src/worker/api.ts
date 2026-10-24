@@ -73,6 +73,8 @@ export type Request =
   | { id: number; method: 'spellIcons'; names: string[] }
   /** The icon file ids of items by id. */
   | { id: number; method: 'itemIcons'; ids: number[] }
+  /** A file's bytes as stored, by file id: a font for the page to load, say. Undefined when it is not on disk. */
+  | { id: number; method: 'file'; fileId: number }
   | { id: number; method: 'backdrops' }
   | { id: number; method: 'place'; map: number; x: number; y: number; facing: number; reach: number; z?: number }
   | { id: number; method: 'maps' }

@@ -271,6 +271,12 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
       const value: IconResult = file && decodeBlp(file.data);
       return { value, transfer: value ? [value.pixels.buffer] : [] };
     }
+    case 'file': {
+      if (!storage) throw new Error('No folder is open');
+      const file = request.fileId ? await storage.readFile(request.fileId) : undefined;
+      const value = file ? file.data.slice() : undefined;
+      return { value, transfer: value ? [value.buffer] : [] };
+    }
     case 'spellIcons': {
       if (!database) throw new Error('No folder is open');
       spellIcons ??= SpellIcons.load(database);
