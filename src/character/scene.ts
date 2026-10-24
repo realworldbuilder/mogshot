@@ -6,8 +6,8 @@ import { BONE_BILLBOARD, type M2Model, parseM2, SEQUENCE_INLINE, VERTEX_SIZE } f
 import { parseSkel, withSkeleton } from '../formats/skel';
 import { parseSkin, type Skin } from '../formats/skin';
 import { identity, multiply, scaling } from '../math/mat4';
-import { animationName } from '../model/animation-names';
-import { findSequence, fingerBones, poseBones, resolveAlias } from '../model/pose';
+import { animationId, animationName } from '../model/animation-names';
+import { findSequence, fingerBones, poseBones, resolveAlias, type Rig } from '../model/pose';
 import { type Appearance, type Option, SLOT_SKIN, type TextureLayer } from './appearance';
 import { composite, type CompositeLayer } from './compositor';
 import type { Equipment, ItemLook, Slot, WeaponKind } from './equipment';
@@ -219,7 +219,17 @@ function compositeScale(layers: readonly { layer: TextureLayer; image: Image }[]
  * Each of its bones takes the matrix of the character's bone with the same name; a bone
  * the character lacks follows its parent.
  */
-function wornBones(model: M2Model, body: M2Model, bodyBones: Float32Array): Float32Array {
+/** A bone as far as following the body goes: its name and its parent. */
+export interface BoneLink {
+  nameHash: number;
+  parent: number;
+}
+
+/**
+ * Bone matrices for a model worn on the body: each of its bones takes the body bone of the
+ * same name, or its parent's matrix where the body has no such bone.
+ */
+export function wornBones(model: { bones: readonly BoneLink[] }, body: { bones: readonly BoneLink[] }, bodyBones: Float32Array): Float32Array {
   const bodyIndex = new Map<number, number>();
   body.bones.forEach((bone, i) => {
     if (!bodyIndex.has(bone.nameHash)) bodyIndex.set(bone.nameHash, i);
@@ -249,7 +259,11 @@ function skinnedTo(model: M2Model, body: M2Model): boolean {
 }
 
 /** The character's attachment point as a matrix: the bone it rides, then its offset. */
-function attachmentMatrix(body: M2Model, bones: Float32Array, attachmentId: number): Float32Array | undefined {
+export function attachmentMatrix(
+  body: Pick<M2Model, 'attachments' | 'attachmentLookup'> & { bones: readonly unknown[] },
+  bones: Float32Array,
+  attachmentId: number,
+): Float32Array | undefined {
   const attachment = body.attachments[body.attachmentLookup[attachmentId] ?? -1];
   if (!attachment || attachment.bone >= body.bones.length) return undefined;
   const offset = identity();
@@ -259,6 +273,31 @@ function attachmentMatrix(body: M2Model, bones: Float32Array, attachmentId: numb
 
 /** How a mesh follows the body: it is the body, it is worn on the body's bones, or it is mounted on an attachment point. */
 export type Follows = 'body' | 'worn' | { attachment: number; own: Float32Array };
+
+/**
+ * Everything needed to pose a built character somewhere else (another thread, another page),
+ * as plain data with typed arrays: the body's skeleton and the keys of the sequences asked
+ * for, read in advance, and how each mesh of the scene follows the body. See model/posable.ts.
+ */
+export interface PackedRig {
+  /** The body's skeleton: a tight copy of its MD20 block (track offsets point into it), sequences, bones, global sequences, attachment points. */
+  body: Rig & Pick<M2Model, 'attachments' | 'attachmentLookup'>;
+  /** Key data of the sequences stored outside the model, by sequence index (the holder's, after aliases). */
+  anims: [sequence: number, keys: Uint8Array][];
+  /** Bone adjustments from appearance choices (face shapes). */
+  boneOffsets: [bone: number, matrix: Float32Array][];
+  /** The hands-closed sequence and the finger bones that take it, when something is held. */
+  gripping: { sequence: number; bones: number[] } | undefined;
+  /** The game's size for the model, applied about the feet. */
+  scale: number;
+  /** One entry per mesh of the scene, in the scene's order. */
+  meshes: PackedFollows[];
+}
+
+export type PackedFollows =
+  | { follows: 'body' }
+  | { follows: 'worn'; bones: BoneLink[] }
+  | { follows: 'attachment'; attachment: number; own: Float32Array };
 
 /** The part of building a scene that any model shares: reading files and reporting what cannot be read. */
 export interface SceneReaders {
@@ -287,6 +326,11 @@ export interface SceneBuilder {
   /** Whether a sequence's keys are in the model or in a file that is on disk. */
   playable(sequence: number): boolean;
   pose(sequence: number, time: number, preset?: string): Promise<PoseResult>;
+  /**
+   * The built character as plain data that can be posed elsewhere, with the keys of the named
+   * animations (every variation of each) read in advance. Names the model lacks are skipped.
+   */
+  pack(animationNames: readonly string[]): Promise<PackedRig>;
   /** The model's animations that can be played. */
   animations(): AnimationInfo[];
   /** The curated poses the model can strike with what it holds. */
@@ -439,6 +483,16 @@ function sceneBuilder(storage: CascStorage, readers: SceneReaders, model: M2Mode
     const holder = resolveAlias(model.sequences, sequence);
     return inline(holder) || storage.files.find(animFileOf(holder)) !== undefined;
   };
+  /** Have the keys of a sequence's holder in hand, reading its file if they are kept outside the model. */
+  const loadKeys = async (sequence: number): Promise<number> => {
+    const holder = model.sequences[sequence] ? resolveAlias(model.sequences, sequence) : -1;
+    if (holder >= 0 && !inline(holder) && !anims.has(holder)) {
+      const file = await storage.readFile(animFileOf(holder));
+      if (!file) throw new Error(`The ${animationName(model.sequences[holder]!.id)} animation is not on disk`);
+      anims.set(holder, animKeyData(file.data));
+    }
+    return holder;
+  };
 
   const builder: SceneBuilder = {
     textures,
@@ -448,12 +502,7 @@ function sceneBuilder(storage: CascStorage, readers: SceneReaders, model: M2Mode
     buildMesh,
     playable,
     pose: async (sequence, time, preset) => {
-      const holder = model.sequences[sequence] ? resolveAlias(model.sequences, sequence) : -1;
-      if (holder >= 0 && !inline(holder) && !anims.has(holder)) {
-        const file = await storage.readFile(animFileOf(holder));
-        if (!file) throw new Error(`The ${animationName(model.sequences[holder]!.id)} animation is not on disk`);
-        anims.set(holder, animKeyData(file.data));
-      }
+      const holder = await loadKeys(sequence);
       const duration = model.sequences[holder]?.duration ?? 0;
       const at = Math.min(Math.max(time, 0), duration);
       const bones = poseBones(model, sequence, at, anims, builder.boneOffsets, builder.gripping);
@@ -476,6 +525,46 @@ function sceneBuilder(storage: CascStorage, readers: SceneReaders, model: M2Mode
       const helm = attachmentMatrix(model, bones, ATTACH.helm);
       const head: [number, number, number] | undefined = helm && [helm[12]! * scale, helm[13]! * scale, helm[14]! * scale];
       return { meshes: posed, bounds: { min, max }, pose: { sequence, time: at, duration, preset }, head };
+    },
+    pack: async (names) => {
+      const wanted = new Set<number>();
+      for (const name of names) {
+        const id = animationId(name);
+        if (id < 0) continue;
+        model.sequences.forEach((sequence, index) => {
+          if (sequence.id === id && playable(index)) wanted.add(index);
+        });
+      }
+      if (builder.gripping) wanted.add(builder.gripping.sequence);
+      const holders = new Set<number>();
+      for (const sequence of wanted) holders.add(await loadKeys(sequence).catch(() => -1));
+      const packedAnims: PackedRig['anims'] = [];
+      for (const holder of holders) {
+        const keys = anims.get(holder);
+        if (keys) packedAnims.push([holder, keys]);
+      }
+      return {
+        body: {
+          // A tight copy: the model's block is a window onto the whole file.
+          md20: model.md20.slice(),
+          sequences: model.sequences,
+          bones: model.bones,
+          globalSequences: model.globalSequences,
+          attachments: model.attachments,
+          attachmentLookup: model.attachmentLookup,
+        },
+        anims: packedAnims,
+        boneOffsets: [...builder.boneOffsets],
+        gripping: builder.gripping && { sequence: builder.gripping.sequence, bones: [...builder.gripping.bones] },
+        scale,
+        meshes: posable.map(({ source, follows }) =>
+          follows === 'body'
+            ? { follows: 'body' }
+            : follows === 'worn'
+              ? { follows: 'worn', bones: source.bones.map((bone) => ({ nameHash: bone.nameHash, parent: bone.parent })) }
+              : { follows: 'attachment', attachment: follows.attachment, own: follows.own },
+        ),
+      };
     },
     animations: () =>
       model.sequences.flatMap((sequence, index) =>
@@ -512,7 +601,7 @@ export async function buildCharacterScene(
   appearance: Appearance,
   equipment: Equipment | undefined,
   request: CharacterRequest,
-): Promise<{ scene: CharacterScene; rig: CharacterRig }> {
+): Promise<{ scene: CharacterScene; rig: CharacterRig; wielding: WeaponKind | 'unarmed'; pack: SceneBuilder['pack'] }> {
   const characterModel = appearance.model(request.raceId, request.sex);
   if (!characterModel) throw new Error(`The game data has no model for race ${request.raceId}, sex ${request.sex}`);
 
@@ -734,7 +823,7 @@ export async function buildCharacterScene(
     pose: first.pose,
     head: first.head,
   };
-  return { scene, rig: { pose: (sequence, time) => builder.pose(sequence, time) } };
+  return { scene, rig: { pose: (sequence, time) => builder.pose(sequence, time) }, wielding, pack: builder.pack };
 }
 
 /** Grow a box to include the vertices of the visible sections after posing. */

@@ -940,6 +940,24 @@ export class CharacterRenderer {
   }
 
   /**
+   * Where a point of the world lands on the canvas, in canvas pixels from the top left, for the
+   * camera as render() would use it: to draw over the scene (a mark at a hand, a bar over a head).
+   * Undefined for a point behind the camera.
+   */
+  project(camera: Camera, point: readonly [number, number, number]): [number, number] | undefined {
+    const { canvas } = this;
+    const { view, projection } = this.cameraMatrices(camera, canvas.width / canvas.height);
+    const seen = transformPoint(view, point);
+    const clip = [
+      projection[0]! * seen[0] + projection[4]! * seen[1] + projection[8]! * seen[2] + projection[12]!,
+      projection[1]! * seen[0] + projection[5]! * seen[1] + projection[9]! * seen[2] + projection[13]!,
+      projection[3]! * seen[0] + projection[7]! * seen[1] + projection[11]! * seen[2] + projection[15]!,
+    ];
+    if (clip[2]! <= 0) return undefined;
+    return [((clip[0]! / clip[2]! + 1) / 2) * canvas.width, ((1 - clip[1]! / clip[2]!) / 2) * canvas.height];
+  }
+
+  /**
    * The camera turned and tilted as `camera` is, with the zoom and pan that put `point` in the
    * middle of a view of that shape and fill half its height with `halfHeight` of the world: a
    * close-up of a face, for one. The numbers mean the same to the command line's camera.

@@ -12,7 +12,7 @@ import { Definitions } from '../db2/definitions';
 import { decodeBlp, type Image } from '../formats/blp';
 import { resolveImport } from '../import/resolve';
 import { FileListSource } from '../io/file-list-source';
-import type { CharacterResult, IconResult, ItemSearchResult, OpenResult, Portraits, Request, Response } from './api';
+import type { CharacterResult, FighterResult, IconResult, ItemSearchResult, OpenResult, Portraits, Request, Response } from './api';
 
 let storage: CascStorage | undefined;
 let database: Database | undefined;
@@ -105,6 +105,29 @@ async function handle(request: Request): Promise<{ value: unknown; transfer?: Tr
         // The vertices are copied, not moved: the rig keeps them to measure each new pose.
         buffers.add(mesh.indices.buffer).add(mesh.bones.buffer).add(mesh.transform.buffer);
       }
+      return { value, transfer: [...buffers] as Transferable[] };
+    }
+    case 'fighter': {
+      if (!storage) throw new Error('No folder is open');
+      const start = performance.now();
+      const items = request.gear.length > 0 ? await loadEquipment() : undefined;
+      const built = await buildCharacterScene(storage, await loadAppearance(), items, {
+        raceId: request.raceId,
+        sex: request.sex,
+        choices: new Map(request.choices),
+        gear: new Map(request.gear),
+        pose: { preset: 'Stand' },
+      });
+      const packed = await built.pack(request.animations);
+      const { scene } = built;
+      const value: FighterResult = { scene, rig: packed, wielding: built.wielding, ms: performance.now() - start };
+      // Nothing of this character is kept here: every buffer moves to the page.
+      const buffers = new Set<ArrayBufferLike>(scene.textures.map((texture) => texture.pixels.buffer));
+      for (const mesh of scene.meshes) buffers.add(mesh.vertices.buffer).add(mesh.indices.buffer).add(mesh.bones.buffer).add(mesh.transform.buffer);
+      buffers.add(packed.body.md20.buffer);
+      for (const [, keys] of packed.anims) buffers.add(keys.buffer);
+      for (const [, matrix] of packed.boneOffsets) buffers.add(matrix.buffer);
+      for (const mesh of packed.meshes) if (mesh.follows === 'attachment') buffers.add(mesh.own.buffer);
       return { value, transfer: [...buffers] as Transferable[] };
     }
     case 'pose': {

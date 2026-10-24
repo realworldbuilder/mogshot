@@ -4,6 +4,7 @@ import type { PickedFile } from '../io/file-list-source';
 import type {
   CharacterResult,
   ClassEntry,
+  FighterResult,
   ImportedRecord,
   ImportResult,
   ItemSetInfo,
@@ -81,6 +82,11 @@ export class DataClient {
   }
 
   /** Pose the character last built at a moment of one of its sequences. */
+  /** Build a character and hand over everything needed to pose it on this thread, with the named animations ready. */
+  fighter(raceId: number, sex: number, choices: [number, number][], gear: [Slot, number][], animations: string[]): Promise<FighterResult> {
+    return this.call({ method: 'fighter', raceId, sex, choices, gear, animations });
+  }
+
   pose(sequence: number, time: number): Promise<PoseResult> {
     return this.call({ method: 'pose', sequence, time });
   }

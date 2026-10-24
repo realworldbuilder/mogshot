@@ -4,9 +4,9 @@ import type { OpenStage, StorageInfo } from '../casc/storage';
 import type { ClassEntry, Race } from '../character/appearance';
 import type { Portraits } from '../character/portraits';
 import type { LoadingScreen } from '../character/backdrops';
-import type { ClassInfo, ItemSetInfo, ItemSummary, Slot } from '../character/equipment';
+import type { ClassInfo, ItemSetInfo, ItemSummary, Slot, WeaponKind } from '../character/equipment';
 import type { Image } from '../formats/blp';
-import type { CharacterScene, PoseRequest, PoseResult } from '../character/scene';
+import type { CharacterScene, PackedRig, PoseRequest, PoseResult } from '../character/scene';
 import type { PickedFile } from '../io/file-list-source';
 import type { ImportedRecord } from '../import/record';
 import type { ImportResult } from '../import/resolve';
@@ -32,6 +32,16 @@ export type Request =
       pose: PoseRequest;
     }
   | { id: number; method: 'pose'; sequence: number; time: number }
+  | {
+      id: number;
+      method: 'fighter';
+      raceId: number;
+      sex: number;
+      choices: [optionId: number, choiceId: number][];
+      gear: [slot: Slot, itemId: number][];
+      /** The animations whose keys are read in advance, so the character can be posed in them at once. */
+      animations: string[];
+    }
   | { id: number; method: 'searchItems'; slot: Slot; query: string }
   | { id: number; method: 'classList' }
   | { id: number; method: 'portraits' }
@@ -51,10 +61,18 @@ export interface ItemSearchResult {
 /** An icon's pixels, or undefined if the file cannot be read. */
 export type IconResult = Image | undefined;
 
-export type { ClassEntry, ClassInfo, ImportedRecord, ImportResult, ItemSetInfo, ItemSummary, LoadingScreen, Portraits, PoseRequest, PoseResult, Race, Slot };
+export type { ClassEntry, ClassInfo, ImportedRecord, ImportResult, ItemSetInfo, ItemSummary, LoadingScreen, PackedRig, Portraits, PoseRequest, PoseResult, Race, Slot, WeaponKind };
 
 export interface CharacterResult {
   scene: CharacterScene;
+  ms: number;
+}
+
+/** A character built in its Stand pose, with everything the page needs to pose it itself. */
+export interface FighterResult {
+  scene: CharacterScene;
+  rig: PackedRig;
+  wielding: WeaponKind | 'unarmed';
   ms: number;
 }
 
