@@ -31,7 +31,33 @@ end
 -- Retail draws a slot in the look the player chose (transmog), which the item id does not
 -- say: the game names that look as an appearance source (an ItemModifiedAppearance id),
 -- which also carries the item's colour. Nil on classic, which has neither.
+--
+-- Since 12.0 a transmog belongs to the character's outfit, not to the item, so the per-item
+-- calls (C_Item.GetCurrentItemTransmogInfo and kin) answer the item's own look even when
+-- another is shown. C_Transmog.GetSlotVisualInfo, which the wardrobe itself reads, says what
+-- the slot shows: the applied source, or the item's own when none is applied.
 local function shownSource(slot)
+	if C_Transmog and C_Transmog.GetSlotVisualInfo and Enum and Enum.TransmogType then
+		local location = {
+			slotID = slot,
+			type = Enum.TransmogType.Appearance,
+			modification = Enum.TransmogModification and Enum.TransmogModification.Main or 0,
+		}
+		local ok, info, _, applied = pcall(C_Transmog.GetSlotVisualInfo, location)
+		local base
+		if ok and type(info) == "table" then
+			-- 12.0 and later: one table.
+			base, applied = info.baseSourceID, info.appliedSourceID
+		elseif ok and type(info) == "number" then
+			-- Before 12.0: baseSourceID, baseVisualID, appliedSourceID, ...
+			base = info
+		else
+			applied = nil
+		end
+		if applied and applied > 0 then return applied end
+		if base and base > 0 then return base end
+	end
+	-- Before 12.0 a transmog belonged to the item, and these said it.
 	if C_Item and C_Item.GetCurrentItemTransmogInfo and ItemLocation and ItemLocation.CreateFromEquipmentSlot then
 		local location = ItemLocation:CreateFromEquipmentSlot(slot)
 		if location and location:IsValid() then
